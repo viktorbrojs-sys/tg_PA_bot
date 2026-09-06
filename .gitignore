@@ -1,6 +1,10 @@
 # Секреты — никогда не коммитить!
 .env
 
+# Файлы, генерируемые deploy-скриптами
+deploy/windows/logs/
+deploy/windows/hidden_launch.vbs
+
 # Python
 __pycache__/
 *.py[cod]

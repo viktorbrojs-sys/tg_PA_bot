@@ -95,52 +95,14 @@ ALLOWED_USER_IDS=123456789,987654321
 
 ## Автозапуск
 
-### Linux — systemd
+В папке [`deploy/`](deploy/) есть готовые скрипты, которые сами ставят
+зависимости, создают `.env` и настраивают автозапуск + автоперезапуск при
+падении:
 
-```bash
-sudo nano /etc/systemd/system/tg-obsidian-bot.service
-```
+- **Linux (systemd)** — `deploy/linux/install.sh`
+- **Windows (Планировщик заданий)** — `deploy\windows\install.bat`
 
-```ini
-[Unit]
-Description=Telegram → Obsidian Bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=ВАШ_ПОЛЬЗОВАТЕЛЬ
-WorkingDirectory=/путь/к/проекту/bot
-EnvironmentFile=/путь/к/проекту/.env
-ExecStart=/usr/bin/python3 main.py
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable tg-obsidian-bot.service
-sudo systemctl start tg-obsidian-bot.service
-sudo systemctl status tg-obsidian-bot.service
-journalctl -u tg-obsidian-bot.service -f
-```
-
-### Windows — bat-файл + Планировщик заданий
-
-`start_bot.bat`:
-
-```batch
-@echo off
-cd /d C:\путь\к\проекту\bot
-python main.py
-```
-
-(переменные окружения читаются из `.env` автоматически — задавать их в `.bat`
-не обязательно). Добавьте файл в **Планировщик заданий** с триггером «При
-входе в систему».
+Подробная пошаговая инструкция — в [INSTALL.md](INSTALL.md).
 
 ---
 

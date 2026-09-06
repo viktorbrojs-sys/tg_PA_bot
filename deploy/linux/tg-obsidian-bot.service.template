@@ -1,0 +1,26 @@
+[Unit]
+Description=Telegram -> Obsidian Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__BOT_USER__
+Group=__BOT_GROUP__
+WorkingDirectory=__PROJECT_DIR__/bot
+EnvironmentFile=__PROJECT_DIR__/.env
+ExecStart=__PROJECT_DIR__/.venv/bin/python __PROJECT_DIR__/bot/main.py
+
+# Автоперезапуск при падении, зависании или после reboot (см. WantedBy ниже)
+Restart=always
+RestartSec=10
+# Отключаем лимит systemd на число рестартов - бот должен пытаться
+# перезапуститься всегда, даже если падал много раз подряд.
+StartLimitIntervalSec=0
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tg-obsidian-bot
+
+[Install]
+WantedBy=multi-user.target
