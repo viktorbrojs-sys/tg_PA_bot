@@ -1,0 +1,33 @@
+# Секреты — никогда не коммитить!
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pythonlibs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Replit
+.cache/
+.local/
+.upm/
