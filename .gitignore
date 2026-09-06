@@ -26,8 +26,3 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
-
-# Replit
-.cache/
-.local/
-.upm/

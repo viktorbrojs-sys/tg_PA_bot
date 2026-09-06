@@ -69,16 +69,16 @@ def _validate_obsidian_file(path: Path) -> str | None:
 
 def load_config() -> BotConfig | None:
     """Load and validate configuration. Returns None (after logging why) on failure."""
-    # override=False: real environment variables (e.g. Replit Secrets, systemd
-    # Environment=) always win over whatever is in the .env file.
+    # override=False: real environment variables (e.g. systemd Environment=,
+    # a process manager, or a container's secret manager) always win over
+    # whatever is in the .env file.
     load_dotenv(dotenv_path=_ENV_FILE, override=False)
 
     token = os.environ.get("TG_BOT_TOKEN", "").strip()
     if not token:
         logger.error(
-            "TG_BOT_TOKEN не задан.\n"
-            "  • Локально: заполните TG_BOT_TOKEN в файле .env (см. .env.example)\n"
-            "  • На Replit: добавьте секрет TG_BOT_TOKEN в разделе Secrets"
+            "TG_BOT_TOKEN не задан. Заполните TG_BOT_TOKEN в файле .env "
+            "(см. .env.example) или задайте его как переменную окружения."
         )
         return None
     if ":" not in token:
