@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0 — add timestamps to tasks
+
+### Added
+- Every task added via plain text now gets a `ГГГГ-ММ-ДД ЧЧ:ММ` timestamp
+  prefix, e.g. `- [ ] 2026-09-07 14:32 Купить молоко`. Implemented in
+  `TaskStore._add_task_sync` with an injectable clock (`now` constructor
+  param) so it stays unit-testable without mocking `datetime` globally.
+- Updated/extended `storage.py` tests to assert on the new format.
+
 ## 1.1.0 — code review pass
 
 ### Fixed

@@ -9,20 +9,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 TASK_PREFIX = "- [ ] "
 DONE_PREFIX = "- [x] "
+TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M"
 
 
 class TaskStore:
     """Thread/async-safe wrapper around a single markdown tasks file."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, now: Callable[[], datetime] = datetime.now) -> None:
         self.path = path
         self._lock = asyncio.Lock()
+        # Injectable clock so tests can freeze time instead of asserting on
+        # whatever datetime.now() happens to return.
+        self._now = now
 
     async def add_task(self, text: str) -> None:
         async with self._lock:
@@ -50,8 +56,9 @@ class TaskStore:
 
     def _add_task_sync(self, text: str) -> None:
         self._ensure_file()
+        timestamp = self._now().strftime(TIMESTAMP_FORMAT)
         with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(f"{TASK_PREFIX}{text}\n")
+            fh.write(f"{TASK_PREFIX}{timestamp} {text}\n")
 
     def _read_lines(self) -> list[str]:
         self._ensure_file()

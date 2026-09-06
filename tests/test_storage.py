@@ -1,21 +1,27 @@
 import asyncio
+from datetime import datetime
 
 import pytest
 from storage import TaskStore
 
+FIXED_NOW = datetime(2026, 9, 7, 14, 32)
+
 
 @pytest.fixture
 def store(tmp_path):
-    return TaskStore(tmp_path / "tasks.md")
+    return TaskStore(tmp_path / "tasks.md", now=lambda: FIXED_NOW)
 
 
 @pytest.mark.asyncio
-async def test_add_task_creates_file_and_appends(store):
+async def test_add_task_creates_file_and_appends_with_timestamp(store):
     await store.add_task("Buy milk")
     await store.add_task("Walk the dog")
 
     content = store.path.read_text(encoding="utf-8")
-    assert content == "- [ ] Buy milk\n- [ ] Walk the dog\n"
+    assert content == (
+        "- [ ] 2026-09-07 14:32 Buy milk\n"
+        "- [ ] 2026-09-07 14:32 Walk the dog\n"
+    )
 
 
 @pytest.mark.asyncio
@@ -43,7 +49,10 @@ async def test_mark_done_updates_correct_line(store):
     assert ok is True
 
     lines = store.path.read_text(encoding="utf-8").splitlines()
-    assert lines == ["- [ ] first", "- [x] second"]
+    assert lines == [
+        "- [ ] 2026-09-07 14:32 first",
+        "- [x] 2026-09-07 14:32 second",
+    ]
 
 
 @pytest.mark.asyncio
@@ -59,4 +68,4 @@ async def test_concurrent_writes_do_not_corrupt_file(store):
 
     lines = store.path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 50
-    assert all(line.startswith("- [ ] task ") for line in lines)
+    assert all(line.startswith("- [ ] 2026-09-07 14:32 task ") for line in lines)
