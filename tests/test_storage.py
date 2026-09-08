@@ -69,3 +69,71 @@ async def test_concurrent_writes_do_not_corrupt_file(store):
     lines = store.path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 50
     assert all(line.startswith("- [ ] 2026-09-07 14:32 task ") for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_list_open_tasks_no_limit_returns_everything(store):
+    for i in range(25):
+        await store.add_task(f"task {i}")
+
+    tasks = await store.list_open_tasks()  # no limit -> full list
+    assert len(tasks) == 25
+    assert tasks[0] == "2026-09-07 14:32 task 0"
+    assert tasks[-1] == "2026-09-07 14:32 task 24"
+
+
+@pytest.mark.asyncio
+async def test_add_task_with_section_creates_header(store):
+    await store.add_task("Buy milk", section="Личное")
+
+    content = store.path.read_text(encoding="utf-8")
+    assert content == (
+        "## Личное\n"
+        "- [ ] 2026-09-07 14:32 Buy milk\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_task_with_section_appends_to_existing_header(store):
+    await store.add_task("first", section="Работа")
+    await store.add_task("second", section="Работа")
+
+    content = store.path.read_text(encoding="utf-8")
+    assert content == (
+        "## Работа\n"
+        "- [ ] 2026-09-07 14:32 first\n"
+        "- [ ] 2026-09-07 14:32 second\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_task_with_different_sections_creates_separate_blocks(store):
+    await store.add_task("work task", section="Работа")
+    await store.add_task("personal task", section="Личное")
+    await store.add_task("another work task", section="Работа")
+
+    lines = store.path.read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        "## Работа",
+        "- [ ] 2026-09-07 14:32 work task",
+        "- [ ] 2026-09-07 14:32 another work task",
+        "",
+        "## Личное",
+        "- [ ] 2026-09-07 14:32 personal task",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_add_task_with_section_leaves_headerless_content_untouched(store):
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text("- [ ] 2026-09-01 10:00 legacy task\n", encoding="utf-8")
+
+    await store.add_task("new task", section="Работа")
+
+    lines = store.path.read_text(encoding="utf-8").splitlines()
+    assert lines == [
+        "- [ ] 2026-09-01 10:00 legacy task",
+        "",
+        "## Работа",
+        "- [ ] 2026-09-07 14:32 new task",
+    ]

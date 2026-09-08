@@ -15,16 +15,27 @@ logger = logging.getLogger(__name__)
 _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
+DEFAULT_TASK_SECTIONS = ("Работа", "Личное")
+DEFAULT_LLM_MODEL = "deepseek-chat"
+
+
 @dataclass(frozen=True)
 class BotConfig:
     token: str
     obsidian_file: Path
     allowed_user_ids: frozenset[int]
     log_level: str
+    deepseek_api_key: str | None
+    llm_model: str
+    task_sections: tuple[str, ...]
 
     @property
     def has_allowlist(self) -> bool:
         return bool(self.allowed_user_ids)
+
+    @property
+    def has_llm(self) -> bool:
+        return bool(self.deepseek_api_key)
 
 
 def _resolve_obsidian_file() -> Path:
@@ -51,6 +62,14 @@ def _resolve_allowed_user_ids() -> frozenset[int]:
         else:
             logger.warning("Ignoring invalid entry in ALLOWED_USER_IDS: %r", part)
     return frozenset(ids)
+
+
+def _resolve_task_sections() -> tuple[str, ...]:
+    raw = os.environ.get("TASK_SECTIONS", "").strip()
+    if not raw:
+        return DEFAULT_TASK_SECTIONS
+    sections = tuple(s.strip() for s in raw.split(",") if s.strip())
+    return sections or DEFAULT_TASK_SECTIONS
 
 
 def _validate_obsidian_file(path: Path) -> str | None:
@@ -99,18 +118,26 @@ def load_config() -> BotConfig | None:
         logger.warning("Неизвестный LOG_LEVEL=%r, использую INFO", log_level)
         log_level = "INFO"
 
+    deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip() or None
+    llm_model = os.environ.get("LLM_MODEL", "").strip() or DEFAULT_LLM_MODEL
+
     config = BotConfig(
         token=token,
         obsidian_file=obsidian_file,
         allowed_user_ids=_resolve_allowed_user_ids(),
         log_level=log_level,
+        deepseek_api_key=deepseek_api_key,
+        llm_model=llm_model,
+        task_sections=_resolve_task_sections(),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
     logger.info(
-        "Config loaded from %s: file=%s allowlist=%s",
+        "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s",
         env_source,
         config.obsidian_file,
         sorted(config.allowed_user_ids) or "disabled",
+        "deepseek" if config.has_llm else "disabled (rule-based fallback)",
+        list(config.task_sections),
     )
     return config

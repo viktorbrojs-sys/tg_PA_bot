@@ -18,6 +18,43 @@ logger = logging.getLogger(__name__)
 TASK_PREFIX = "- [ ] "
 DONE_PREFIX = "- [x] "
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M"
+SECTION_HEADER_PREFIX = "## "
+
+
+def _insert_into_section(lines: list[str], section: str, new_line: str) -> list[str]:
+    """Return *lines* with *new_line* inserted into the ``## {section}`` block.
+
+    If the section header does not exist yet, it is created at the end of the
+    file. This keeps existing (header-less) vaults working unchanged: callers
+    that never pass a section never trigger this at all.
+    """
+    header = f"{SECTION_HEADER_PREFIX}{section}"
+    header_idx = next((i for i, line in enumerate(lines) if line.strip() == header), None)
+
+    if header_idx is None:
+        result = list(lines)
+        if result and result[-1].strip():
+            result.append("")
+        result.append(header)
+        result.append(new_line)
+        return result
+
+    # Find the end of this section's block: the next header, or EOF.
+    end_idx = len(lines)
+    for i in range(header_idx + 1, len(lines)):
+        if lines[i].startswith(SECTION_HEADER_PREFIX):
+            end_idx = i
+            break
+
+    # Insert before any trailing blank lines so the new task sits with its
+    # siblings instead of after a blank gap.
+    insert_at = end_idx
+    while insert_at > header_idx + 1 and lines[insert_at - 1].strip() == "":
+        insert_at -= 1
+
+    result = list(lines)
+    result.insert(insert_at, new_line)
+    return result
 
 
 class TaskStore:
@@ -30,11 +67,22 @@ class TaskStore:
         # whatever datetime.now() happens to return.
         self._now = now
 
-    async def add_task(self, text: str) -> None:
-        async with self._lock:
-            await asyncio.to_thread(self._add_task_sync, text)
+    async def add_task(self, text: str, section: str | None = None) -> None:
+        """Append a new open task, timestamped.
 
-    async def list_open_tasks(self, limit: int) -> list[str]:
+        If *section* is given, the task is filed under a ``## {section}``
+        markdown header (created if missing) instead of being appended
+        flat at the end of the file.
+        """
+        async with self._lock:
+            await asyncio.to_thread(self._add_task_sync, text, section)
+
+    async def list_open_tasks(self, limit: int | None = None) -> list[str]:
+        """Return open tasks, most-recent-last.
+
+        *limit* caps the number of tasks returned (most recent *limit*).
+        ``None`` (the default) returns every open task in the file.
+        """
         async with self._lock:
             return await asyncio.to_thread(self._list_open_tasks_sync, limit)
 
@@ -54,23 +102,33 @@ class TaskStore:
             self.path.touch()
             logger.info("Created tasks file: %s", self.path)
 
-    def _add_task_sync(self, text: str) -> None:
+    def _add_task_sync(self, text: str, section: str | None) -> None:
         self._ensure_file()
         timestamp = self._now().strftime(TIMESTAMP_FORMAT)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(f"{TASK_PREFIX}{timestamp} {text}\n")
+        line = f"{TASK_PREFIX}{timestamp} {text}"
+
+        if section is None:
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(f"{line}\n")
+            return
+
+        lines = self._read_lines()
+        new_lines = _insert_into_section(lines, section, line)
+        self.path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
     def _read_lines(self) -> list[str]:
         self._ensure_file()
         return self.path.read_text(encoding="utf-8").splitlines()
 
-    def _list_open_tasks_sync(self, limit: int) -> list[str]:
+    def _list_open_tasks_sync(self, limit: int | None) -> list[str]:
         lines = self._read_lines()
         open_tasks = [
             line[len(TASK_PREFIX):].strip()
             for line in lines
             if line.startswith(TASK_PREFIX)
         ]
+        if limit is None:
+            return open_tasks
         return open_tasks[-limit:]
 
     def _mark_done_sync(self, index: int) -> bool:

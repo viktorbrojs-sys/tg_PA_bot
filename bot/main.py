@@ -12,8 +12,11 @@ from handlers import (
     cmd_unknown,
     make_cmd_done,
     make_cmd_list,
+    make_cmd_plan,
     make_handle_message,
 )
+from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
+from services.task_service import TaskService
 from storage import TaskStore
 from telegram import Update
 from telegram.error import TelegramError
@@ -79,17 +82,26 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
             pass  # best-effort notification only
 
 
+def build_llm_client(config: BotConfig) -> LLMClient:
+    if config.deepseek_api_key:
+        return DeepSeekClient(api_key=config.deepseek_api_key, model=config.llm_model)
+    return NullLLMClient()
+
+
 def register_handlers(app: Application, config: BotConfig) -> None:
     store = TaskStore(config.obsidian_file)
+    llm = build_llm_client(config)
+    service = TaskService(store, llm, sections=config.task_sections)
 
     if config.has_allowlist:
         app.add_handler(TypeHandler(Update, make_access_guard(config.allowed_user_ids)), group=-1)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("list", make_cmd_list(store)))
-    app.add_handler(CommandHandler("done", make_cmd_done(store)))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, make_handle_message(store)))
+    app.add_handler(CommandHandler("list", make_cmd_list(service)))
+    app.add_handler(CommandHandler("done", make_cmd_done(service)))
+    app.add_handler(CommandHandler("plan", make_cmd_plan(service)))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, make_handle_message(service)))
     app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
 
     app.add_error_handler(on_error)
