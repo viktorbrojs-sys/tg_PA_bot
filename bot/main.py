@@ -20,6 +20,7 @@ from handlers import (
 from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
 from scheduler.jobs import setup_scheduler
 from services.digest_service import DigestService
+from services.pending_command_state import PendingCommandState
 from services.reflection_service import ReflectionService, ReflectionState
 from services.search_service import SearchService
 from services.task_service import TaskService
@@ -99,6 +100,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     digest_service = DigestService(task_service)
     reflection_state = ReflectionState()
     reflection_service = ReflectionService(task_service, llm)
+    pending_state = PendingCommandState()
 
     # Stashed so the post_init callback (which runs once the event loop is
     # already up) can wire the scheduler without rebuilding all of this.
@@ -110,14 +112,16 @@ def register_handlers(app: Application, config: BotConfig) -> None:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("list", make_cmd_list(task_service)))
-    app.add_handler(CommandHandler("done", make_cmd_done(task_service)))
-    app.add_handler(CommandHandler("plan", make_cmd_plan(task_service)))
-    app.add_handler(CommandHandler("search", make_cmd_search(search_service)))
+    app.add_handler(CommandHandler("list", make_cmd_list(task_service, pending_state)))
+    app.add_handler(CommandHandler("done", make_cmd_done(task_service, pending_state)))
+    app.add_handler(CommandHandler("plan", make_cmd_plan(task_service, pending_state)))
+    app.add_handler(CommandHandler("search", make_cmd_search(search_service, pending_state)))
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            make_handle_message(task_service, reflection_state, reflection_service),
+            make_handle_message(
+                task_service, search_service, reflection_state, reflection_service, pending_state
+            ),
         )
     )
     app.add_handler(MessageHandler(filters.COMMAND, cmd_unknown))
