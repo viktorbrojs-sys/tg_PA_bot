@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 # Telegram's hard cap is 4096 chars; leave headroom for formatting.
 MESSAGE_CHUNK_LIMIT = 3500
 
+# Single source of truth for the Telegram commands menu (the "/" popup and
+# the ≡ button next to the text field), registered via bot.set_my_commands()
+# in main.py. Telegram requires: 1-32 chars, lowercase latin letters/digits/
+# underscores only; description up to 256 chars.
+BOT_COMMANDS: list[tuple[str, str]] = [
+    ("list", "Все открытые задачи (или /list N — последние N)"),
+    ("plan", "Разбить сообщение на несколько задач на день"),
+    ("search", "Найти информацию в заметках"),
+    ("done", "Отметить задачу как выполненную (номер из /list)"),
+    ("help", "Справка по командам"),
+]
+
 WELCOME_TEXT = (
     "👋 Бот-секретарь для Obsidian.\n\n"
     "Просто напишите текст — задача автоматически классифицируется по разделу "

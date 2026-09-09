@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1 — Telegram commands menu
+
+### Added
+- Список команд (`/list`, `/plan`, `/search`, `/done`, `/help`) регистрируется
+  через `bot.set_my_commands()` при старте — теперь они появляются как меню
+  по кнопке ≡ рядом с полем ввода и во всплывающей подсказке при вводе `/`.
+- `handlers.BOT_COMMANDS` — единый источник списка команд с описаниями.
+- Тест на соответствие ограничениям Telegram (длина имени/описания, только
+  `a-z0-9_`, отсутствие дублей).
+
 ## 1.4.0 — scheduler, morning digest, evening reflection, deadline reminders, search
 
 ### Added

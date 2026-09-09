@@ -7,6 +7,7 @@ import sys
 
 from config import BotConfig, load_config
 from handlers import (
+    BOT_COMMANDS,
     cmd_help,
     cmd_start,
     cmd_unknown,
@@ -23,7 +24,7 @@ from services.reflection_service import ReflectionService, ReflectionState
 from services.search_service import SearchService
 from services.task_service import TaskService
 from storage import TaskStore
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -126,9 +127,15 @@ def register_handlers(app: Application, config: BotConfig) -> None:
 
 def build_app(config: BotConfig) -> Application:
     async def post_init(app: Application) -> None:
+        # Registers the "/" command popup and the ≡ menu button in Telegram
+        # clients. Must run after the event loop is up, so it lives here
+        # (post_init) rather than in register_handlers().
+        await app.bot.set_my_commands(
+            [BotCommand(command, description) for command, description in BOT_COMMANDS]
+        )
+
         # The scheduler needs a running event loop, which only exists once
-        # PTB's Application has been initialised — hence wiring it here
-        # rather than in register_handlers().
+        # PTB's Application has been initialised — hence wiring it here too.
         digest_service: DigestService = app.bot_data["digest_service"]
         reflection_state: ReflectionState = app.bot_data["reflection_state"]
         app.bot_data["scheduler"] = setup_scheduler(app, config, digest_service, reflection_state)
