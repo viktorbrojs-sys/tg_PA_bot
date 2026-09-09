@@ -57,6 +57,8 @@ def test_load_config_success(monkeypatch, tmp_path):
     assert cfg.timezone == config.DEFAULT_TIMEZONE
     assert cfg.morning_digest_time == config.DEFAULT_MORNING_DIGEST_TIME
     assert cfg.evening_reflection_time == config.DEFAULT_EVENING_REFLECTION_TIME
+    assert cfg.weekly_review_day == config.DEFAULT_WEEKLY_REVIEW_DAY
+    assert cfg.weekly_review_time == config.DEFAULT_WEEKLY_REVIEW_TIME
 
 
 def test_resolve_task_sections_parses_and_trims(monkeypatch):
@@ -93,3 +95,13 @@ def test_resolve_time_hhmm_accepts_valid_value(monkeypatch):
 def test_resolve_time_hhmm_rejects_invalid_value(monkeypatch):
     monkeypatch.setenv("MORNING_DIGEST_TIME", "25:99")
     assert config._resolve_time_hhmm("MORNING_DIGEST_TIME", "08:00") == "08:00"
+
+
+def test_resolve_weekday_accepts_valid_value(monkeypatch):
+    monkeypatch.setenv("WEEKLY_REVIEW_DAY", "Fri")
+    assert config._resolve_weekday("WEEKLY_REVIEW_DAY", "sun") == "fri"
+
+
+def test_resolve_weekday_rejects_invalid_value(monkeypatch):
+    monkeypatch.setenv("WEEKLY_REVIEW_DAY", "someday")
+    assert config._resolve_weekday("WEEKLY_REVIEW_DAY", "sun") == "sun"

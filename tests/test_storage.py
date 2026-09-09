@@ -51,7 +51,7 @@ async def test_mark_done_updates_correct_line(store):
     lines = store.path.read_text(encoding="utf-8").splitlines()
     assert lines == [
         "- [ ] 2026-09-07 14:32 first",
-        "- [x] 2026-09-07 14:32 second",
+        "- [x] 2026-09-07 14:32 second ✅ 2026-09-07 14:32",
     ]
 
 
@@ -147,3 +147,28 @@ async def test_read_all_lines_returns_raw_content_including_non_task_lines(store
 
     lines = await store.read_all_lines()
     assert lines == ["## Работа", "- [ ] 2026-09-01 10:00 task", "free text note"]
+
+
+@pytest.mark.asyncio
+async def test_list_completed_since_returns_only_tasks_completed_after_cutoff(store):
+    await store.add_task("old one")
+    await store.add_task("recent one")
+    await store.mark_done(1)  # completed at FIXED_NOW (2026-09-07 14:32)
+    await store.mark_done(1)  # remaining open task ("recent one") completed too
+
+    since_after_completion = datetime(2026, 9, 7, 15, 0)
+    assert await store.list_completed_since(since_after_completion) == []
+
+    since_before_completion = datetime(2026, 9, 7, 14, 0)
+    completed = await store.list_completed_since(since_before_completion)
+    assert len(completed) == 2
+    assert all("✅ 2026-09-07 14:32" in line for line in completed)
+
+
+@pytest.mark.asyncio
+async def test_list_completed_since_ignores_legacy_done_tasks_without_timestamp(store):
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    store.path.write_text("- [x] 2026-09-01 10:00 legacy done task\n", encoding="utf-8")
+
+    completed = await store.list_completed_since(datetime(2020, 1, 1))
+    assert completed == []

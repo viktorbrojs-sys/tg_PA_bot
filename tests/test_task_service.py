@@ -98,3 +98,13 @@ async def test_mark_done_delegates_to_store(service):
     await service.add_task("Закончить отчёт")
     assert await service.mark_done(1) is True
     assert await service.mark_done(99) is False
+
+
+@pytest.mark.asyncio
+async def test_list_completed_since_delegates_to_store(service):
+    await service.add_task("Закончить отчёт")
+    await service.mark_done(1)
+
+    completed = await service.list_completed_since(FIXED_NOW)
+    assert len(completed) == 1
+    assert "Закончить отчёт" in completed[0]

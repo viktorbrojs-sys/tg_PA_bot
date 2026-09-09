@@ -55,12 +55,24 @@ class ReflectionService:
             if await self._tasks.mark_done(index):
                 done_texts[index] = open_tasks[index - 1]
 
-        remaining = len(open_tasks) - len(done_texts)
+        # Anything not marked done stays open — nothing to change in the file
+        # for that (it never left the open list), but we call it out
+        # explicitly so "перенос на завтра" is visible rather than implicit.
+        carried_over = [
+            text for i, text in enumerate(open_tasks, start=1) if i not in done_texts
+        ]
+
         lines: list[str] = []
         if done_texts:
             lines.append(f"✅ Отметил как выполненные ({len(done_texts)}):")
             lines.extend(f"  • {done_texts[i]}" for i in sorted(done_texts))
         else:
             lines.append("Не нашёл среди открытых задач того, что вы описали.")
-        lines.append(f"\nОсталось открытых задач: {remaining}.")
+
+        if carried_over:
+            lines.append(f"\n🔁 Переносится на завтра ({len(carried_over)}):")
+            lines.extend(f"  • {t}" for t in carried_over)
+        else:
+            lines.append("\n🎉 Открытых задач не осталось!")
+
         return "\n".join(lines)

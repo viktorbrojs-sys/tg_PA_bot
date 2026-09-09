@@ -20,6 +20,11 @@ DEFAULT_LLM_MODEL = "deepseek-chat"
 DEFAULT_TIMEZONE = "Europe/Moscow"
 DEFAULT_MORNING_DIGEST_TIME = "08:00"
 DEFAULT_EVENING_REFLECTION_TIME = "21:00"
+DEFAULT_WEEKLY_REVIEW_DAY = "sun"
+DEFAULT_WEEKLY_REVIEW_TIME = "20:00"
+
+# Values accepted by APScheduler's CronTrigger(day_of_week=...).
+_VALID_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,8 @@ class BotConfig:
     timezone: str
     morning_digest_time: str
     evening_reflection_time: str
+    weekly_review_day: str
+    weekly_review_time: str
 
     @property
     def has_allowlist(self) -> bool:
@@ -107,6 +114,16 @@ def _resolve_time_hhmm(env_var: str, default: str) -> str:
     return default
 
 
+def _resolve_weekday(env_var: str, default: str) -> str:
+    raw = os.environ.get(env_var, "").strip().lower()
+    if not raw:
+        return default
+    if raw in _VALID_WEEKDAYS:
+        return raw
+    logger.warning("Ignoring invalid %s=%r, using default %s", env_var, raw, default)
+    return default
+
+
 def _validate_obsidian_file(path: Path) -> str | None:
     """Return an error message if the tasks file cannot possibly be written, else None."""
     if path.exists() and path.is_dir():
@@ -171,12 +188,14 @@ def load_config() -> BotConfig | None:
         evening_reflection_time=_resolve_time_hhmm(
             "EVENING_REFLECTION_TIME", DEFAULT_EVENING_REFLECTION_TIME
         ),
+        weekly_review_day=_resolve_weekday("WEEKLY_REVIEW_DAY", DEFAULT_WEEKLY_REVIEW_DAY),
+        weekly_review_time=_resolve_time_hhmm("WEEKLY_REVIEW_TIME", DEFAULT_WEEKLY_REVIEW_TIME),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
     logger.info(
         "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s "
-        "chat_id=%s digest=%s reflection=%s tz=%s",
+        "chat_id=%s digest=%s reflection=%s weekly_review=%s %s tz=%s",
         env_source,
         config.obsidian_file,
         sorted(config.allowed_user_ids) or "disabled",
@@ -185,6 +204,8 @@ def load_config() -> BotConfig | None:
         config.chat_id or "not set (proactive messages disabled)",
         config.morning_digest_time,
         config.evening_reflection_time,
+        config.weekly_review_day,
+        config.weekly_review_time,
         config.timezone,
     )
     return config

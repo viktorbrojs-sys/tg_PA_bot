@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,9 @@ TASK_PREFIX = "- [ ] "
 DONE_PREFIX = "- [x] "
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M"
 SECTION_HEADER_PREFIX = "## "
+DONE_MARKER = "✅ "
+_DONE_TIMESTAMP_PATTERN = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}"
+_DONE_TIMESTAMP_RE = re.compile(rf"{re.escape(DONE_MARKER)}({_DONE_TIMESTAMP_PATTERN})$")
 
 
 def _insert_into_section(lines: list[str], section: str, new_line: str) -> list[str]:
@@ -87,7 +91,8 @@ class TaskStore:
             return await asyncio.to_thread(self._list_open_tasks_sync, limit)
 
     async def mark_done(self, index: int) -> bool:
-        """Mark the *index*-th (1-based, as shown by /list) open task as done.
+        """Mark the *index*-th (1-based, as shown by /list) open task as done,
+        appending a "✅ ГГГГ-ММ-ДД ЧЧ:ММ" completion timestamp.
 
         Returns True on success, False if the index is out of range.
         """
@@ -98,6 +103,16 @@ class TaskStore:
         """Return every raw line in the file (tasks, headers, free text) — used for search."""
         async with self._lock:
             return await asyncio.to_thread(self._read_lines)
+
+    async def list_completed_since(self, since: datetime) -> list[str]:
+        """Return completed tasks whose completion timestamp is at/after *since*.
+
+        Tasks marked done before this feature existed (no "✅ timestamp"
+        suffix) are silently skipped — there's no way to know when they were
+        actually completed, so it would be misleading to guess.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(self._list_completed_since_sync, since)
 
     # ── sync helpers (always called via asyncio.to_thread) ──────────────────
 
@@ -144,6 +159,21 @@ class TaskStore:
 
         line_no = open_positions[index - 1]
         task_text = lines[line_no][len(TASK_PREFIX):]
-        lines[line_no] = f"{DONE_PREFIX}{task_text}"
+        completed_at = self._now().strftime(TIMESTAMP_FORMAT)
+        lines[line_no] = f"{DONE_PREFIX}{task_text} {DONE_MARKER}{completed_at}"
         self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return True
+
+    def _list_completed_since_sync(self, since: datetime) -> list[str]:
+        lines = self._read_lines()
+        results = []
+        for line in lines:
+            if not line.startswith(DONE_PREFIX):
+                continue
+            match = _DONE_TIMESTAMP_RE.search(line)
+            if match is None:
+                continue
+            completed_at = datetime.strptime(match.group(1), TIMESTAMP_FORMAT)
+            if completed_at >= since:
+                results.append(line[len(DONE_PREFIX):])
+        return results

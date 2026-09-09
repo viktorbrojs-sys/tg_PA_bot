@@ -51,6 +51,10 @@ def setup_scheduler(
         reflection_state.start(chat_id)
         await app.bot.send_message(chat_id=chat_id, text=text)
 
+    async def send_weekly_review() -> None:
+        text = await digest.build_weekly_review()
+        await app.bot.send_message(chat_id=chat_id, text=text)
+
     morning_hour, morning_minute = _parse_hhmm(config.morning_digest_time)
     scheduler.add_job(
         send_morning_digest,
@@ -67,11 +71,24 @@ def setup_scheduler(
         replace_existing=True,
     )
 
+    weekly_hour, weekly_minute = _parse_hhmm(config.weekly_review_time)
+    scheduler.add_job(
+        send_weekly_review,
+        CronTrigger(
+            day_of_week=config.weekly_review_day, hour=weekly_hour, minute=weekly_minute
+        ),
+        id="weekly_review",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(
-        "Scheduler started: morning digest at %s, evening reflection at %s (%s)",
+        "Scheduler started: morning digest at %s, evening reflection at %s, "
+        "weekly review on %s at %s (%s)",
         config.morning_digest_time,
         config.evening_reflection_time,
+        config.weekly_review_day,
+        config.weekly_review_time,
         config.timezone,
     )
     return scheduler

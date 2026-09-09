@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 
+from services.digest_service import DigestService
 from services.pending_command_state import PendingCommandState
 from services.reflection_service import ReflectionService, ReflectionState
 from services.search_service import SearchService
@@ -37,6 +38,7 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("plan", "Разбить сообщение на несколько задач на день"),
     ("search", "Найти информацию в заметках"),
     ("done", "Отметить задачу как выполненную (номер из /list)"),
+    ("review", "Еженедельный обзор выполненных задач"),
     ("help", "Справка по командам"),
 ]
 
@@ -49,6 +51,7 @@ WELCOME_TEXT = (
     "/plan <текст> — разбить сообщение на несколько задач на день\n"
     "/search <запрос> — найти информацию в заметках\n"
     "/done N — отметить задачу N (из /list) как выполненную\n"
+    "/review — еженедельный обзор выполненных задач\n"
     "/help — справка\n\n"
     "Если ввести команду без параметра (например, просто /search), бот сам "
     "спросит значение и подставит ваш следующий ответ."
@@ -62,6 +65,7 @@ HELP_TEXT = (
     "• /plan <текст> — разбить сообщение на несколько задач одним вызовом\n"
     "• /search <запрос> — найти информацию в заметках\n"
     "• /done N — отметить N-ю задачу из /list как выполненную\n"
+    "• /review — еженедельный обзор выполненных задач (за последние 7 дней)\n"
     "• /start — приветствие\n"
     "• /help — эта справка\n\n"
     "Команду с параметром можно вводить и без него — бот спросит значение "
@@ -282,6 +286,26 @@ def make_cmd_search(service: SearchService, pending_state: PendingCommandState):
         await update.message.reply_text(reply)
 
     return cmd_search
+
+
+# ── /review — on-demand weekly review (also sent proactively by the scheduler) ─
+
+
+def make_cmd_review(digest: DigestService):
+    async def cmd_review(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        try:
+            text = await digest.build_weekly_review()
+        except OSError as exc:
+            logger.error("Failed to build weekly review: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(text)
+
+    return cmd_review
 
 
 # ── plain-text messages: reflection reply > pending command > new task ──────

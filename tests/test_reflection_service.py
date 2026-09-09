@@ -62,10 +62,11 @@ async def test_process_reply_marks_matching_tasks_done(task_service, reflection)
 
     summary = await reflection.process_reply("done 1,3")
 
+    assert "✅ Отметил как выполненные (2)" in summary
     assert "первая" in summary
     assert "третья" in summary
-    assert "вторая" not in summary
-    assert "Осталось открытых задач: 1." in summary
+    assert "🔁 Переносится на завтра (1)" in summary
+    assert "вторая" in summary
 
     remaining = await task_service.list_all_open_tasks()
     assert len(remaining) == 1
@@ -79,6 +80,7 @@ async def test_process_reply_with_no_matches(task_service, reflection):
     summary = await reflection.process_reply("ничего не делал")
 
     assert "Не нашёл" in summary
+    assert "🔁 Переносится на завтра (1)" in summary
     remaining = await task_service.list_all_open_tasks()
     assert len(remaining) == 1
 
@@ -90,5 +92,6 @@ async def test_process_reply_ignores_out_of_range_indices(task_service, reflecti
     summary = await reflection.process_reply("done 1,99")
 
     assert "единственная задача" in summary
+    assert "Открытых задач не осталось" in summary
     remaining = await task_service.list_all_open_tasks()
     assert len(remaining) == 0

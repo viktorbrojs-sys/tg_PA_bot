@@ -14,6 +14,7 @@ from handlers import (
     make_cmd_done,
     make_cmd_list,
     make_cmd_plan,
+    make_cmd_review,
     make_cmd_search,
     make_handle_message,
 )
@@ -116,6 +117,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     app.add_handler(CommandHandler("done", make_cmd_done(task_service, pending_state)))
     app.add_handler(CommandHandler("plan", make_cmd_plan(task_service, pending_state)))
     app.add_handler(CommandHandler("search", make_cmd_search(search_service, pending_state)))
+    app.add_handler(CommandHandler("review", make_cmd_review(digest_service)))
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
