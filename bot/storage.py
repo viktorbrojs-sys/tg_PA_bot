@@ -94,6 +94,11 @@ class TaskStore:
         async with self._lock:
             return await asyncio.to_thread(self._mark_done_sync, index)
 
+    async def read_all_lines(self) -> list[str]:
+        """Return every raw line in the file (tasks, headers, free text) — used for search."""
+        async with self._lock:
+            return await asyncio.to_thread(self._read_lines)
+
     # ── sync helpers (always called via asyncio.to_thread) ──────────────────
 
     def _ensure_file(self) -> None:

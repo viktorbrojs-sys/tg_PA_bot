@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from services.reflection_service import ReflectionService, ReflectionState
+from services.search_service import SearchService
 from services.task_service import TaskService
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -25,6 +27,7 @@ WELCOME_TEXT = (
     "Команды:\n"
     "/list — все открытые задачи (можно /list 20 — только последние N)\n"
     "/plan <текст> — разбить сообщение на несколько задач на день\n"
+    "/search <запрос> — найти информацию в заметках\n"
     "/done N — отметить задачу N (из /list) как выполненную\n"
     "/help — справка"
 )
@@ -35,6 +38,7 @@ HELP_TEXT = (
     "• /list — полный список открытых задач\n"
     "• /list N — последние N открытых задач\n"
     "• /plan <текст> — разбить сообщение на несколько задач одним вызовом\n"
+    "• /search <запрос> — найти информацию в заметках\n"
     "• /done N — отметить N-ю задачу из /list как выполненную\n"
     "• /start — приветствие\n"
     "• /help — эта справка"
@@ -182,7 +186,33 @@ def make_cmd_plan(service: TaskService):
     return cmd_plan
 
 
-def make_handle_message(service: TaskService):
+def make_cmd_search(service: SearchService):
+    async def cmd_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        query = " ".join(ctx.args or []).strip()
+        if not query:
+            await update.message.reply_text("Использование: /search <запрос>")
+            return
+
+        try:
+            answer = await service.search(query)
+        except OSError as exc:
+            logger.error("Failed to read tasks file for search: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(answer)
+
+    return cmd_search
+
+
+def make_handle_message(
+    task_service: TaskService,
+    reflection_state: ReflectionState,
+    reflection_service: ReflectionService,
+):
     async def handle_message(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None or update.message.text is None:
             return
@@ -190,8 +220,24 @@ def make_handle_message(service: TaskService):
         if not text:
             return
 
+        chat_id = update.effective_chat.id if update.effective_chat else None
+
+        # A pending evening-reflection prompt takes priority over the normal
+        # "classify this as a new task" flow — the very next message from
+        # that chat is the answer to "что сделано?", not a new task.
+        if chat_id is not None and reflection_state.is_awaiting(chat_id):
+            reflection_state.clear(chat_id)
+            try:
+                summary = await reflection_service.process_reply(text)
+            except OSError as exc:
+                logger.error("Failed to process reflection reply: %s", exc)
+                await update.message.reply_text(GENERIC_ERROR_TEXT)
+                return
+            await update.message.reply_text(summary)
+            return
+
         try:
-            section = await service.add_task(text)
+            section = await task_service.add_task(text)
         except OSError as exc:
             logger.error("Failed to write task: %s", exc)
             await update.message.reply_text(GENERIC_ERROR_TEXT)

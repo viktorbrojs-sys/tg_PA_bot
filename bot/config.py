@@ -17,6 +17,9 @@ _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 DEFAULT_TASK_SECTIONS = ("Работа", "Личное")
 DEFAULT_LLM_MODEL = "deepseek-chat"
+DEFAULT_TIMEZONE = "Europe/Moscow"
+DEFAULT_MORNING_DIGEST_TIME = "08:00"
+DEFAULT_EVENING_REFLECTION_TIME = "21:00"
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,10 @@ class BotConfig:
     deepseek_api_key: str | None
     llm_model: str
     task_sections: tuple[str, ...]
+    chat_id: int | None
+    timezone: str
+    morning_digest_time: str
+    evening_reflection_time: str
 
     @property
     def has_allowlist(self) -> bool:
@@ -70,6 +77,34 @@ def _resolve_task_sections() -> tuple[str, ...]:
         return DEFAULT_TASK_SECTIONS
     sections = tuple(s.strip() for s in raw.split(",") if s.strip())
     return sections or DEFAULT_TASK_SECTIONS
+
+
+def _resolve_chat_id(allowed_user_ids: frozenset[int]) -> int | None:
+    raw = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if raw:
+        if raw.lstrip("-").isdigit():
+            return int(raw)
+        logger.warning("Ignoring invalid TELEGRAM_CHAT_ID: %r", raw)
+
+    # Convenience default for the common single-user setup: in a private
+    # Telegram chat, chat_id == user_id, so if there's exactly one allowed
+    # user we already know where to send proactive messages.
+    if len(allowed_user_ids) == 1:
+        return next(iter(allowed_user_ids))
+    return None
+
+
+def _resolve_time_hhmm(env_var: str, default: str) -> str:
+    raw = os.environ.get(env_var, "").strip()
+    if not raw:
+        return default
+    parts = raw.split(":")
+    if len(parts) == 2 and all(p.isdigit() for p in parts):
+        hour, minute = int(parts[0]), int(parts[1])
+        if 0 <= hour < 24 and 0 <= minute < 60:
+            return raw
+    logger.warning("Ignoring invalid %s=%r, using default %s", env_var, raw, default)
+    return default
 
 
 def _validate_obsidian_file(path: Path) -> str | None:
@@ -120,24 +155,36 @@ def load_config() -> BotConfig | None:
 
     deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip() or None
     llm_model = os.environ.get("LLM_MODEL", "").strip() or DEFAULT_LLM_MODEL
+    allowed_user_ids = _resolve_allowed_user_ids()
 
     config = BotConfig(
         token=token,
         obsidian_file=obsidian_file,
-        allowed_user_ids=_resolve_allowed_user_ids(),
+        allowed_user_ids=allowed_user_ids,
         log_level=log_level,
         deepseek_api_key=deepseek_api_key,
         llm_model=llm_model,
         task_sections=_resolve_task_sections(),
+        chat_id=_resolve_chat_id(allowed_user_ids),
+        timezone=os.environ.get("TIMEZONE", "").strip() or DEFAULT_TIMEZONE,
+        morning_digest_time=_resolve_time_hhmm("MORNING_DIGEST_TIME", DEFAULT_MORNING_DIGEST_TIME),
+        evening_reflection_time=_resolve_time_hhmm(
+            "EVENING_REFLECTION_TIME", DEFAULT_EVENING_REFLECTION_TIME
+        ),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
     logger.info(
-        "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s",
+        "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s "
+        "chat_id=%s digest=%s reflection=%s tz=%s",
         env_source,
         config.obsidian_file,
         sorted(config.allowed_user_ids) or "disabled",
         "deepseek" if config.has_llm else "disabled (rule-based fallback)",
         list(config.task_sections),
+        config.chat_id or "not set (proactive messages disabled)",
+        config.morning_digest_time,
+        config.evening_reflection_time,
+        config.timezone,
     )
     return config

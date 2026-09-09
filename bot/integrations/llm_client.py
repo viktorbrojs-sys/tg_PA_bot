@@ -39,6 +39,14 @@ class LLMClient(Protocol):
         """Turn a free-form message into a list of discrete task strings."""
         ...
 
+    async def match_completed_tasks(self, reply: str, tasks: list[str]) -> list[int]:
+        """Return 1-based indices into *tasks* that *reply* says are done."""
+        ...
+
+    async def summarize_search(self, query: str, matches: list[str]) -> str:
+        """Turn raw matching lines from the vault into a short answer to *query*."""
+        ...
+
 
 class NullLLMClient:
     """No-op fallback used when no LLM API key is configured."""
@@ -48,6 +56,13 @@ class NullLLMClient:
 
     async def split_into_tasks(self, text: str) -> list[str]:
         return _naive_split(text)
+
+    async def match_completed_tasks(self, reply: str, tasks: list[str]) -> list[int]:
+        return _naive_match_completed(reply, tasks)
+
+    async def summarize_search(self, query: str, matches: list[str]) -> str:
+        lines = "\n".join(f"• {m}" for m in matches)
+        return f"🔍 Найдено по «{query}»:\n{lines}"
 
 
 class DeepSeekClient:
@@ -123,8 +138,57 @@ class DeepSeekClient:
                 return cleaned
         return _naive_split(text)
 
+    async def match_completed_tasks(self, reply: str, tasks: list[str]) -> list[int]:
+        if not tasks:
+            return []
+
+        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(tasks))
+        system = (
+            "Пользователь описывает свободным текстом, что он сделал сегодня. "
+            f"Вот его открытые задачи:\n{numbered}\n\n"
+            "Ответь ТОЛЬКО JSON-массивом номеров задач, которые, судя по описанию, "
+            'выполнены, например: [1, 3]. Если ничего не выполнено — [].'
+        )
+        try:
+            answer = await self._chat(system, reply)
+            indices = json.loads(answer)
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            logger.warning("LLM reflection matching failed, falling back to keyword match: %s", exc)
+            return _naive_match_completed(reply, tasks)
+
+        if isinstance(indices, list) and all(isinstance(i, int) for i in indices):
+            return indices
+        return _naive_match_completed(reply, tasks)
+
+    async def summarize_search(self, query: str, matches: list[str]) -> str:
+        system = (
+            "Тебе даны строки, найденные в заметках пользователя по его запросу. "
+            "Сформулируй краткий связный ответ на запрос, опираясь ТОЛЬКО на эти строки. "
+            "Если ответа в них нет, честно скажи об этом."
+        )
+        user = f"Запрос: {query}\n\nНайденные строки:\n" + "\n".join(matches)
+        try:
+            return await self._chat(system, user)
+        except (httpx.HTTPError, KeyError, IndexError, TypeError) as exc:
+            logger.warning("LLM search summary failed, falling back to raw matches: %s", exc)
+            lines = "\n".join(f"• {m}" for m in matches)
+            return f"🔍 Найдено по «{query}»:\n{lines}"
+
 
 def _naive_split(text: str) -> list[str]:
     """Split free text into tasks by line, stripping common bullet markers."""
     lines = (line.strip(" \t-•·*").strip() for line in text.splitlines())
     return [line for line in lines if line]
+
+
+def _naive_match_completed(reply: str, tasks: list[str]) -> list[int]:
+    """Keyword-overlap fallback: a task counts as done if a distinctive word from
+    it (4+ chars) appears in the reply. Crude, but keeps reflection usable
+    without an LLM configured."""
+    reply_lower = reply.lower()
+    matched: list[int] = []
+    for i, task in enumerate(tasks, start=1):
+        words = [w.strip(".,!?:;()") for w in task.lower().split()]
+        if any(len(w) >= 4 and w in reply_lower for w in words):
+            matched.append(i)
+    return matched

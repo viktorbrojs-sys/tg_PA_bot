@@ -137,3 +137,13 @@ async def test_add_task_with_section_leaves_headerless_content_untouched(store):
         "## Работа",
         "- [ ] 2026-09-07 14:32 new task",
     ]
+
+
+@pytest.mark.asyncio
+async def test_read_all_lines_returns_raw_content_including_non_task_lines(store):
+    store.path.parent.mkdir(parents=True, exist_ok=True)
+    content = "## Работа\n- [ ] 2026-09-01 10:00 task\nfree text note\n"
+    store.path.write_text(content, encoding="utf-8")
+
+    lines = await store.read_all_lines()
+    assert lines == ["## Работа", "- [ ] 2026-09-01 10:00 task", "free text note"]

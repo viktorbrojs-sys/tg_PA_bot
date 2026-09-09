@@ -42,6 +42,8 @@ def test_load_config_success(monkeypatch, tmp_path):
     monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
     monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "vault" / "tasks.md"))
     monkeypatch.delenv("ALLOWED_USER_IDS", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
 
     cfg = config.load_config()
@@ -49,3 +51,45 @@ def test_load_config_success(monkeypatch, tmp_path):
     assert cfg.token == "123456:ABCDEF"
     assert cfg.obsidian_file == (tmp_path / "vault" / "tasks.md").resolve()
     assert cfg.has_allowlist is False
+    assert cfg.has_llm is False
+    assert cfg.task_sections == config.DEFAULT_TASK_SECTIONS
+    assert cfg.chat_id is None
+    assert cfg.timezone == config.DEFAULT_TIMEZONE
+    assert cfg.morning_digest_time == config.DEFAULT_MORNING_DIGEST_TIME
+    assert cfg.evening_reflection_time == config.DEFAULT_EVENING_REFLECTION_TIME
+
+
+def test_resolve_task_sections_parses_and_trims(monkeypatch):
+    monkeypatch.setenv("TASK_SECTIONS", " Работа , Личное ,, Проект X")
+    assert config._resolve_task_sections() == ("Работа", "Личное", "Проект X")
+
+
+def test_resolve_task_sections_defaults_when_empty(monkeypatch):
+    monkeypatch.delenv("TASK_SECTIONS", raising=False)
+    assert config._resolve_task_sections() == config.DEFAULT_TASK_SECTIONS
+
+
+def test_resolve_chat_id_uses_explicit_value(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "555")
+    assert config._resolve_chat_id(frozenset({123, 456})) == 555
+
+
+def test_resolve_chat_id_falls_back_to_sole_allowed_user(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    assert config._resolve_chat_id(frozenset({123})) == 123
+
+
+def test_resolve_chat_id_none_when_ambiguous(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    assert config._resolve_chat_id(frozenset({123, 456})) is None
+    assert config._resolve_chat_id(frozenset()) is None
+
+
+def test_resolve_time_hhmm_accepts_valid_value(monkeypatch):
+    monkeypatch.setenv("MORNING_DIGEST_TIME", "07:30")
+    assert config._resolve_time_hhmm("MORNING_DIGEST_TIME", "08:00") == "07:30"
+
+
+def test_resolve_time_hhmm_rejects_invalid_value(monkeypatch):
+    monkeypatch.setenv("MORNING_DIGEST_TIME", "25:99")
+    assert config._resolve_time_hhmm("MORNING_DIGEST_TIME", "08:00") == "08:00"
