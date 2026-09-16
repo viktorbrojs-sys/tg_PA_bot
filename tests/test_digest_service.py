@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from integrations.google_calendar import CalendarClient, CalendarEvent
 from integrations.llm_client import NullLLMClient
 from services.digest_service import DigestService
 from services.task_service import TaskService
@@ -100,3 +101,50 @@ async def test_weekly_review_excludes_tasks_completed_before_the_window(task_ser
 
     text = await digest.build_weekly_review()
     assert "нет задач" in text.lower()
+
+
+class FakeCalendarClient:
+    def __init__(self, events: list[CalendarEvent]) -> None:
+        self._events = events
+
+    async def list_events(self, start: datetime, end: datetime) -> list[CalendarEvent]:
+        return [e for e in self._events if start <= e.start < end]
+
+
+def _event(hour: int, summary: str = "Встреча") -> CalendarEvent:
+    start = datetime(2026, 9, 9, hour, 0, tzinfo=UTC)
+    return CalendarEvent(id=summary, summary=summary, start=start, end=start + timedelta(hours=1))
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_includes_todays_calendar_events(task_service):
+    calendar: CalendarClient = FakeCalendarClient([_event(14, "Созвон с командой")])
+    digest = DigestService(task_service, calendar=calendar, now=lambda: FIXED_NOW, timezone="UTC")
+
+    text = await digest.build_morning_digest()
+    assert "Встречи сегодня (1)" in text
+    assert "14:00" in text
+    assert "Созвон с командой" in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_without_calendar_configured_has_no_events_section(digest):
+    text = await digest.build_morning_digest()
+    assert "Встречи сегодня" not in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_shows_events_even_with_no_open_tasks(tmp_path):
+    empty_task_service = TaskService(
+        TaskStore(tmp_path / "tasks.md", now=lambda: FIXED_NOW),
+        NullLLMClient(),
+        sections=("Работа",),
+    )
+    calendar: CalendarClient = FakeCalendarClient([_event(9, "Утренняя встреча")])
+    digest = DigestService(
+        empty_task_service, calendar=calendar, now=lambda: FIXED_NOW, timezone="UTC"
+    )
+
+    text = await digest.build_morning_digest()
+    assert "Открытых задач нет" in text
+    assert "Утренняя встреча" in text

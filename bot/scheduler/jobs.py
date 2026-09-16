@@ -7,15 +7,24 @@ update.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from config import BotConfig
 from services.digest_service import DigestService
+from services.meeting_brief_service import MeetingBriefService
 from services.reflection_service import ReflectionState
 from telegram.ext import Application
 
 logger = logging.getLogger(__name__)
+
+# How often to poll for upcoming meetings. Must be small enough that no
+# meeting starting within its lead-time window is missed between polls —
+# see MeetingBriefService's poll_window, which this should stay well inside.
+MEETING_BRIEF_POLL_MINUTES = 5
 
 
 def _parse_hhmm(value: str) -> tuple[int, int]:
@@ -28,9 +37,12 @@ def setup_scheduler(
     config: BotConfig,
     digest: DigestService,
     reflection_state: ReflectionState,
+    meeting_briefs: MeetingBriefService | None = None,
 ) -> AsyncIOScheduler | None:
-    """Register the morning/evening jobs. Returns None (and logs a warning) if
-    there's no chat to proactively message — set TELEGRAM_CHAT_ID to enable.
+    """Register the morning/evening/weekly jobs, plus meeting-brief polling if
+    *meeting_briefs* is given (i.e. Google Calendar is configured). Returns
+    None (and logs a warning) if there's no chat to proactively message —
+    set TELEGRAM_CHAT_ID to enable.
     """
     if config.chat_id is None:
         logger.warning(
@@ -40,6 +52,7 @@ def setup_scheduler(
         return None
 
     chat_id = config.chat_id
+    tz = ZoneInfo(config.timezone)
     scheduler = AsyncIOScheduler(timezone=config.timezone)
 
     async def send_morning_digest() -> None:
@@ -81,14 +94,30 @@ def setup_scheduler(
         replace_existing=True,
     )
 
+    if meeting_briefs is not None:
+        briefs = meeting_briefs  # narrowed to non-None for the closure below
+
+        async def send_meeting_briefs() -> None:
+            due = await briefs.due_briefs(datetime.now(tz=tz))
+            for _event, brief in due:
+                await app.bot.send_message(chat_id=chat_id, text=brief)
+
+        scheduler.add_job(
+            send_meeting_briefs,
+            IntervalTrigger(minutes=MEETING_BRIEF_POLL_MINUTES),
+            id="meeting_briefs",
+            replace_existing=True,
+        )
+
     scheduler.start()
     logger.info(
         "Scheduler started: morning digest at %s, evening reflection at %s, "
-        "weekly review on %s at %s (%s)",
+        "weekly review on %s at %s (%s), meeting briefs %s",
         config.morning_digest_time,
         config.evening_reflection_time,
         config.weekly_review_day,
         config.weekly_review_time,
         config.timezone,
+        "enabled" if meeting_briefs is not None else "disabled (no calendar configured)",
     )
     return scheduler

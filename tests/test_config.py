@@ -44,6 +44,9 @@ def test_load_config_success(monkeypatch, tmp_path):
     monkeypatch.delenv("ALLOWED_USER_IDS", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CALENDAR_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CALENDAR_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("GOOGLE_CALENDAR_REFRESH_TOKEN", raising=False)
     monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
 
     cfg = config.load_config()
@@ -59,6 +62,9 @@ def test_load_config_success(monkeypatch, tmp_path):
     assert cfg.evening_reflection_time == config.DEFAULT_EVENING_REFLECTION_TIME
     assert cfg.weekly_review_day == config.DEFAULT_WEEKLY_REVIEW_DAY
     assert cfg.weekly_review_time == config.DEFAULT_WEEKLY_REVIEW_TIME
+    assert cfg.has_calendar is False
+    assert cfg.google_calendar_id == config.DEFAULT_GOOGLE_CALENDAR_ID
+    assert cfg.meeting_brief_lead_minutes == config.DEFAULT_MEETING_BRIEF_LEAD_MINUTES
 
 
 def test_resolve_task_sections_parses_and_trims(monkeypatch):
@@ -105,3 +111,38 @@ def test_resolve_weekday_accepts_valid_value(monkeypatch):
 def test_resolve_weekday_rejects_invalid_value(monkeypatch):
     monkeypatch.setenv("WEEKLY_REVIEW_DAY", "someday")
     assert config._resolve_weekday("WEEKLY_REVIEW_DAY", "sun") == "sun"
+
+
+def test_resolve_positive_int_accepts_valid_value(monkeypatch):
+    monkeypatch.setenv("MEETING_BRIEF_LEAD_MINUTES", "45")
+    assert config._resolve_positive_int("MEETING_BRIEF_LEAD_MINUTES", 30) == 45
+
+
+def test_resolve_positive_int_rejects_zero_and_negative(monkeypatch):
+    monkeypatch.setenv("MEETING_BRIEF_LEAD_MINUTES", "0")
+    assert config._resolve_positive_int("MEETING_BRIEF_LEAD_MINUTES", 30) == 30
+    monkeypatch.setenv("MEETING_BRIEF_LEAD_MINUTES", "-5")
+    assert config._resolve_positive_int("MEETING_BRIEF_LEAD_MINUTES", 30) == 30
+
+
+def test_resolve_positive_int_defaults_when_empty(monkeypatch):
+    monkeypatch.delenv("MEETING_BRIEF_LEAD_MINUTES", raising=False)
+    assert config._resolve_positive_int("MEETING_BRIEF_LEAD_MINUTES", 30) == 30
+
+
+def test_has_calendar_requires_all_three_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
+    monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "tasks.md"))
+    monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
+
+    monkeypatch.setenv("GOOGLE_CALENDAR_CLIENT_ID", "id")
+    monkeypatch.setenv("GOOGLE_CALENDAR_CLIENT_SECRET", "secret")
+    monkeypatch.delenv("GOOGLE_CALENDAR_REFRESH_TOKEN", raising=False)
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.has_calendar is False
+
+    monkeypatch.setenv("GOOGLE_CALENDAR_REFRESH_TOKEN", "refresh")
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.has_calendar is True

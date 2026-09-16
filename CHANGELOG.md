@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.6.0 — Google Calendar (read-only): events in digest, meeting prep
+
+### Added
+- **`integrations/google_calendar.py`** — `CalendarClient` abstraction,
+  `GoogleCalendarClient` (raw REST API via httpx, no SDK dependency;
+  refresh-token auth, read-only `calendar.readonly` scope) and
+  `NullCalendarClient` fallback so the bot works exactly as before without
+  Google Calendar configured.
+- **Утренний дайджест** теперь показывает сегодняшние встречи, если
+  календарь настроен — раздел просто не появляется без него.
+- **`services/meeting_brief_service.py`** — `MeetingBriefService` +
+  `MeetingBriefState`: за `MEETING_BRIEF_LEAD_MINUTES` минут (по умолчанию
+  30) до события бот присылает тему, время, место, участников и что
+  нашлось по теме встречи через `SearchService`. Каждое событие брифуется
+  ровно один раз (трекинг в памяти, без дублей при повторном опросе).
+- Планировщик: новая периодическая задача (каждые 5 минут) опроса
+  предстоящих встреч — добавляется только если календарь настроен.
+- **`scripts/google_calendar_auth.py`** — одноразовый скрипт для
+  пользователя: OAuth Device Flow (без браузерного redirect), печатает
+  готовые строки `GOOGLE_CALENDAR_*` для `.env`.
+- Конфиг: `GOOGLE_CALENDAR_CLIENT_ID/SECRET/REFRESH_TOKEN/ID`,
+  `MEETING_BRIEF_LEAD_MINUTES`, свойство `BotConfig.has_calendar`.
+- `README.md`/`USER_GUIDE.md`/`.env.example` — раздел настройки Google
+  Calendar (создание OAuth-клиента, запуск скрипта авторизации).
+- 22 новых теста (парсинг событий календаря, мок HTTP для токена/событий,
+  `MeetingBriefService`, интеграция в дайджест, резолверы конфига); итого
+  93, ruff+mypy чистые.
+
 ## 1.5.1 — user guide, docs refresh
 
 ### Added

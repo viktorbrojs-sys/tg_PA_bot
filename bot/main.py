@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from datetime import timedelta
 
 from config import BotConfig, load_config
 from handlers import (
@@ -18,9 +19,11 @@ from handlers import (
     make_cmd_search,
     make_handle_message,
 )
+from integrations.google_calendar import CalendarClient, GoogleCalendarClient, NullCalendarClient
 from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
 from scheduler.jobs import setup_scheduler
 from services.digest_service import DigestService
+from services.meeting_brief_service import MeetingBriefService, MeetingBriefState
 from services.pending_command_state import PendingCommandState
 from services.reflection_service import ReflectionService, ReflectionState
 from services.search_service import SearchService
@@ -92,21 +95,47 @@ def build_llm_client(config: BotConfig) -> LLMClient:
     return NullLLMClient()
 
 
+def build_calendar_client(config: BotConfig) -> CalendarClient:
+    if (
+        config.google_calendar_client_id
+        and config.google_calendar_client_secret
+        and config.google_calendar_refresh_token
+    ):
+        return GoogleCalendarClient(
+            client_id=config.google_calendar_client_id,
+            client_secret=config.google_calendar_client_secret,
+            refresh_token=config.google_calendar_refresh_token,
+            calendar_id=config.google_calendar_id,
+        )
+    return NullCalendarClient()
+
+
 def register_handlers(app: Application, config: BotConfig) -> None:
     store = TaskStore(config.obsidian_file)
     llm = build_llm_client(config)
+    calendar = build_calendar_client(config)
 
     task_service = TaskService(store, llm, sections=config.task_sections)
     search_service = SearchService(store, llm)
-    digest_service = DigestService(task_service)
+    digest_service = DigestService(task_service, calendar=calendar, timezone=config.timezone)
     reflection_state = ReflectionState()
     reflection_service = ReflectionService(task_service, llm)
     pending_state = PendingCommandState()
+
+    meeting_brief_service: MeetingBriefService | None = None
+    if config.has_calendar:
+        meeting_brief_service = MeetingBriefService(
+            calendar,
+            search_service,
+            MeetingBriefState(),
+            lead_time=timedelta(minutes=config.meeting_brief_lead_minutes),
+        )
 
     # Stashed so the post_init callback (which runs once the event loop is
     # already up) can wire the scheduler without rebuilding all of this.
     app.bot_data["digest_service"] = digest_service
     app.bot_data["reflection_state"] = reflection_state
+    app.bot_data["meeting_brief_service"] = meeting_brief_service
 
     if config.has_allowlist:
         app.add_handler(TypeHandler(Update, make_access_guard(config.allowed_user_ids)), group=-1)
@@ -144,7 +173,10 @@ def build_app(config: BotConfig) -> Application:
         # PTB's Application has been initialised — hence wiring it here too.
         digest_service: DigestService = app.bot_data["digest_service"]
         reflection_state: ReflectionState = app.bot_data["reflection_state"]
-        app.bot_data["scheduler"] = setup_scheduler(app, config, digest_service, reflection_state)
+        meeting_brief_service: MeetingBriefService | None = app.bot_data["meeting_brief_service"]
+        app.bot_data["scheduler"] = setup_scheduler(
+            app, config, digest_service, reflection_state, meeting_brief_service
+        )
 
     return Application.builder().token(config.token).post_init(post_init).build()
 

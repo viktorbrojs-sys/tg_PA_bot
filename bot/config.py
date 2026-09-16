@@ -22,6 +22,8 @@ DEFAULT_MORNING_DIGEST_TIME = "08:00"
 DEFAULT_EVENING_REFLECTION_TIME = "21:00"
 DEFAULT_WEEKLY_REVIEW_DAY = "sun"
 DEFAULT_WEEKLY_REVIEW_TIME = "20:00"
+DEFAULT_GOOGLE_CALENDAR_ID = "primary"
+DEFAULT_MEETING_BRIEF_LEAD_MINUTES = 30
 
 # Values accepted by APScheduler's CronTrigger(day_of_week=...).
 _VALID_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
@@ -42,6 +44,11 @@ class BotConfig:
     evening_reflection_time: str
     weekly_review_day: str
     weekly_review_time: str
+    google_calendar_client_id: str | None
+    google_calendar_client_secret: str | None
+    google_calendar_refresh_token: str | None
+    google_calendar_id: str
+    meeting_brief_lead_minutes: int
 
     @property
     def has_allowlist(self) -> bool:
@@ -50,6 +57,14 @@ class BotConfig:
     @property
     def has_llm(self) -> bool:
         return bool(self.deepseek_api_key)
+
+    @property
+    def has_calendar(self) -> bool:
+        return bool(
+            self.google_calendar_client_id
+            and self.google_calendar_client_secret
+            and self.google_calendar_refresh_token
+        )
 
 
 def _resolve_obsidian_file() -> Path:
@@ -124,6 +139,16 @@ def _resolve_weekday(env_var: str, default: str) -> str:
     return default
 
 
+def _resolve_positive_int(env_var: str, default: int) -> int:
+    raw = os.environ.get(env_var, "").strip()
+    if not raw:
+        return default
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    logger.warning("Ignoring invalid %s=%r, using default %s", env_var, raw, default)
+    return default
+
+
 def _validate_obsidian_file(path: Path) -> str | None:
     """Return an error message if the tasks file cannot possibly be written, else None."""
     if path.exists() and path.is_dir():
@@ -190,12 +215,24 @@ def load_config() -> BotConfig | None:
         ),
         weekly_review_day=_resolve_weekday("WEEKLY_REVIEW_DAY", DEFAULT_WEEKLY_REVIEW_DAY),
         weekly_review_time=_resolve_time_hhmm("WEEKLY_REVIEW_TIME", DEFAULT_WEEKLY_REVIEW_TIME),
+        google_calendar_client_id=os.environ.get("GOOGLE_CALENDAR_CLIENT_ID", "").strip() or None,
+        google_calendar_client_secret=(
+            os.environ.get("GOOGLE_CALENDAR_CLIENT_SECRET", "").strip() or None
+        ),
+        google_calendar_refresh_token=(
+            os.environ.get("GOOGLE_CALENDAR_REFRESH_TOKEN", "").strip() or None
+        ),
+        google_calendar_id=os.environ.get("GOOGLE_CALENDAR_ID", "").strip()
+        or DEFAULT_GOOGLE_CALENDAR_ID,
+        meeting_brief_lead_minutes=_resolve_positive_int(
+            "MEETING_BRIEF_LEAD_MINUTES", DEFAULT_MEETING_BRIEF_LEAD_MINUTES
+        ),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
     logger.info(
         "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s "
-        "chat_id=%s digest=%s reflection=%s weekly_review=%s %s tz=%s",
+        "chat_id=%s digest=%s reflection=%s weekly_review=%s %s tz=%s calendar=%s",
         env_source,
         config.obsidian_file,
         sorted(config.allowed_user_ids) or "disabled",
@@ -207,5 +244,6 @@ def load_config() -> BotConfig | None:
         config.weekly_review_day,
         config.weekly_review_time,
         config.timezone,
+        "google" if config.has_calendar else "disabled",
     )
     return config
