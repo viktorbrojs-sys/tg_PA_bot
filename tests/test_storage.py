@@ -183,7 +183,7 @@ async def test_set_deadline_appends_tag(store):
     assert ok is True
 
     tasks = await store.list_open_tasks()
-    assert tasks == ["2026-09-07 14:32 Сдать отчёт @2026-09-20"]
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт [due:: 2026-09-20]"]
 
 
 @pytest.mark.asyncio
@@ -194,7 +194,7 @@ async def test_set_deadline_replaces_existing_tag(store):
     await store.set_deadline(1, date(2026, 10, 1))
 
     tasks = await store.list_open_tasks()
-    assert tasks == ["2026-09-07 14:32 Сдать отчёт @2026-10-01"]
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт [due:: 2026-10-01]"]
 
 
 @pytest.mark.asyncio
@@ -222,7 +222,7 @@ async def test_set_priority_appends_tag(store):
     assert ok is True
 
     tasks = await store.list_open_tasks()
-    assert tasks == ["2026-09-07 14:32 Сдать отчёт !критический"]
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт [priority:: 1]"]
 
 
 @pytest.mark.asyncio
@@ -233,7 +233,7 @@ async def test_set_priority_replaces_existing_tag(store):
     await store.set_priority(1, "высокий")
 
     tasks = await store.list_open_tasks()
-    assert tasks == ["2026-09-07 14:32 Сдать отчёт !высокий"]
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт [priority:: 2]"]
 
 
 @pytest.mark.asyncio
@@ -254,11 +254,11 @@ async def test_deadline_and_priority_tags_coexist(store):
     await store.set_priority(1, "критический")
 
     tasks = await store.list_open_tasks()
-    assert tasks == ["2026-09-07 14:32 Сдать отчёт @2026-09-20 !критический"]
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт [due:: 2026-09-20] [priority:: 1]"]
 
 
 def test_extract_deadline_parses_tag():
-    assert storage.extract_deadline("Сдать отчёт @2026-09-20") == date(2026, 9, 20)
+    assert storage.extract_deadline("Сдать отчёт [due:: 2026-09-20]") == date(2026, 9, 20)
 
 
 def test_extract_deadline_returns_none_without_tag():
@@ -266,7 +266,19 @@ def test_extract_deadline_returns_none_without_tag():
 
 
 def test_extract_priority_is_case_insensitive():
-    assert storage.extract_priority("Задача !ВЫСОКИЙ") == "высокий"
+    assert storage.extract_priority("Задача [PRIORITY:: 2]") == "высокий"
+
+
+def test_extract_priority_ignores_out_of_range_index():
+    assert storage.extract_priority("Задача [priority:: 9]") is None
+
+
+def test_extract_category_parses_tag():
+    assert storage.extract_category("Задача [category:: Работа]") == "Работа"
+
+
+def test_extract_category_returns_none_without_tag():
+    assert storage.extract_category("Обычная задача") is None
 
 
 def test_extract_priority_returns_none_without_tag():
@@ -288,3 +300,42 @@ def test_extract_priority_returns_none_without_tag():
 )
 def test_parse_priority_input(raw, expected):
     assert storage.parse_priority_input(raw) == expected
+
+
+@pytest.mark.asyncio
+async def test_set_category_appends_tag(store):
+    await store.add_task("Сдать отчёт")
+
+    ok = await store.set_category(1, "Маркетинг")
+    assert ok is True
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт [category:: Маркетинг]"]
+
+
+@pytest.mark.asyncio
+async def test_set_category_replaces_existing_tag(store):
+    await store.add_task("Сдать отчёт")
+    await store.set_category(1, "Работа")
+
+    await store.set_category(1, "Маркетинг")
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт [category:: Маркетинг]"]
+
+
+@pytest.mark.asyncio
+async def test_set_category_none_removes_tag(store):
+    await store.add_task("Сдать отчёт")
+    await store.set_category(1, "Работа")
+
+    await store.set_category(1, None)
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт"]
+
+
+@pytest.mark.asyncio
+async def test_set_category_out_of_range_index_returns_false(store):
+    await store.add_task("Сдать отчёт")
+    assert await store.set_category(99, "Работа") is False

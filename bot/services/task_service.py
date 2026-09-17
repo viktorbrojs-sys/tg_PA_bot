@@ -21,6 +21,14 @@ class PlannedTask:
     section: str
 
 
+def _with_category_tag(text: str, section: str) -> str:
+    """Append the ``[category:: Раздел]`` Dataview inline field so the task's
+    section (already visible via the ``## Раздел`` header it's filed under)
+    is also readable per-task, without opening the file structure.
+    """
+    return f"{text} [category:: {section}]"
+
+
 class TaskService:
     def __init__(
         self,
@@ -35,7 +43,7 @@ class TaskService:
     async def add_task(self, text: str) -> str:
         """Classify and store a single task. Returns the section it was filed under."""
         section = await self._llm.classify_task(text, list(self._sections))
-        await self._store.add_task(text, section=section)
+        await self._store.add_task(_with_category_tag(text, section), section=section)
         return section
 
     async def plan_day(self, text: str) -> list[PlannedTask]:
@@ -49,7 +57,7 @@ class TaskService:
         planned: list[PlannedTask] = []
         for piece in pieces:
             section = await self._llm.classify_task(piece, list(self._sections))
-            await self._store.add_task(piece, section=section)
+            await self._store.add_task(_with_category_tag(piece, section), section=section)
             planned.append(PlannedTask(text=piece, section=section))
         return planned
 
@@ -71,3 +79,6 @@ class TaskService:
 
     async def set_priority(self, index: int, priority: str | None) -> bool:
         return await self._store.set_priority(index, priority)
+
+    async def set_category(self, index: int, category: str | None) -> bool:
+        return await self._store.set_category(index, category)

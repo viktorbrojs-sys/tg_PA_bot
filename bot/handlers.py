@@ -42,6 +42,7 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("done", "Отметить задачу как выполненную (номер из /list)"),
     ("deadline", "Установить или убрать дедлайн у задачи"),
     ("priority", "Установить или убрать приоритет у задачи"),
+    ("setcategory", "Изменить раздел (категорию) у задачи"),
     ("review", "Еженедельный обзор выполненных задач"),
     ("help", "Справка по командам"),
 ]
@@ -61,6 +62,7 @@ WELCOME_TEXT = (
     "/done N — отметить задачу N (из /list) как выполненную\n"
     "/deadline N ГГГГ-ММ-ДД — поставить дедлайн задаче N (необязательно для всех)\n"
     "/priority N уровень — поставить приоритет задаче N\n"
+    "/setcategory N раздел — изменить раздел задачи N\n"
     "/review — еженедельный обзор выполненных задач\n"
     "/help — справка\n\n"
     "Если ввести команду без параметра (например, просто /search), бот сам "
@@ -79,6 +81,8 @@ HELP_TEXT = (
     "Дедлайн ставится по желанию, не у каждой задачи он есть\n"
     f"• /priority N уровень — поставить приоритет задаче N ({_PRIORITY_LEVELS_HINT}); "
     "/priority N off — убрать\n"
+    "• /setcategory N раздел — изменить раздел задачи N (например «3 Маркетинг»); "
+    "/setcategory N off — убрать\n"
     "• /review — еженедельный обзор выполненных задач (за последние 7 дней)\n"
     "• /start — приветствие\n"
     "• /help — эта справка\n\n"
@@ -375,6 +379,70 @@ def make_cmd_priority(service: TaskService, pending_state: PendingCommandState):
     return cmd_priority
 
 
+# ── /setcategory — <номер> <раздел>, or <номер> off ─────────────────────────
+
+_CATEGORY_OFF_VALUES = {"off", "нет", "убрать", "-"}
+
+
+async def _run_setcategory(service: TaskService, raw: str) -> str:
+    parts = raw.split(maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        return (
+            "Не понял. Формат: «<номер> <раздел>», например «3 Маркетинг». "
+            "«3 off» — убрать раздел."
+        )
+
+    index = int(parts[0])
+    value = parts[1].strip()
+
+    if value.lower() in _CATEGORY_OFF_VALUES:
+        ok = await service.set_category(index, None)
+        if ok:
+            return f"🗂 Раздел у задачи {index} убран."
+        return f"⚠️ Не нашёл задачу с номером {index}. Проверьте /list."
+
+    ok = await service.set_category(index, value)
+    if ok:
+        return f"🗂 Раздел задачи {index}: {value}."
+    return f"⚠️ Не нашёл задачу с номером {index}. Проверьте /list."
+
+
+def _has_valid_setcategory_args(raw: str) -> bool:
+    parts = raw.split(maxsplit=1)
+    return len(parts) == 2 and parts[0].isdigit() and bool(parts[1].strip())
+
+
+def make_cmd_setcategory(service: TaskService, pending_state: PendingCommandState):
+    async def cmd_setcategory(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        chat_id = _chat_id(update)
+        if chat_id is not None:
+            pending_state.clear(chat_id)
+
+        raw = " ".join(ctx.args or []).strip()
+        if not _has_valid_setcategory_args(raw):
+            if chat_id is not None:
+                pending_state.start(chat_id, "setcategory")
+            await update.message.reply_text(
+                "Какой задаче и какой раздел поставить? Пришлите номер (из /list) "
+                "и раздел через пробел, например «3 Маркетинг». «3 off» — убрать раздел."
+            )
+            return
+
+        try:
+            reply = await _run_setcategory(service, raw)
+        except OSError as exc:
+            logger.error("Failed to update task category: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(reply)
+
+    return cmd_setcategory
+
+
 # ── /plan — required free-text argument ──────────────────────────────────────
 
 
@@ -521,6 +589,8 @@ def make_handle_message(
                     reply = await _run_deadline(task_service, text)
                 elif command == "priority":
                     reply = await _run_priority(task_service, text)
+                elif command == "setcategory":
+                    reply = await _run_setcategory(task_service, text)
                 else:  # pragma: no cover — defensive, all known commands handled above
                     reply = None
             except OSError as exc:

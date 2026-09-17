@@ -5,11 +5,13 @@ from handlers import (
     BOT_COMMANDS,
     _has_valid_deadline_args,
     _has_valid_priority_args,
+    _has_valid_setcategory_args,
     _run_deadline,
     _run_done,
     _run_plan,
     _run_priority,
     _run_search,
+    _run_setcategory,
 )
 from integrations.llm_client import NullLLMClient
 from services.search_service import SearchService
@@ -83,7 +85,7 @@ async def test_run_deadline_sets_tag(task_service):
     assert "2026-09-20" in reply
 
     tasks = await task_service.list_all_open_tasks()
-    assert "@2026-09-20" in tasks[0]
+    assert "[due:: 2026-09-20]" in tasks[0]
 
 
 @pytest.mark.asyncio
@@ -95,7 +97,7 @@ async def test_run_deadline_off_removes_tag(task_service):
     assert "убран" in reply
 
     tasks = await task_service.list_all_open_tasks()
-    assert "@2026-09-20" not in tasks[0]
+    assert "[due:: 2026-09-20]" not in tasks[0]
 
 
 @pytest.mark.asyncio
@@ -127,7 +129,7 @@ async def test_run_priority_sets_tag_by_word(task_service):
     assert "Высокий" in reply
 
     tasks = await task_service.list_all_open_tasks()
-    assert "!высокий" in tasks[0]
+    assert "[priority:: 2]" in tasks[0]
 
 
 @pytest.mark.asyncio
@@ -138,7 +140,7 @@ async def test_run_priority_sets_tag_by_number(task_service):
     assert "Критический" in reply
 
     tasks = await task_service.list_all_open_tasks()
-    assert "!критический" in tasks[0]
+    assert "[priority:: 1]" in tasks[0]
 
 
 @pytest.mark.asyncio
@@ -150,7 +152,44 @@ async def test_run_priority_off_removes_tag(task_service):
     assert "убран" in reply
 
     tasks = await task_service.list_all_open_tasks()
-    assert "!высокий" not in tasks[0]
+    assert "[priority:: 2]" not in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_setcategory_sets_tag(task_service):
+    await task_service.add_task("Сдать отчёт")
+
+    reply = await _run_setcategory(task_service, "1 Маркетинг")
+    assert "Маркетинг" in reply
+
+    tasks = await task_service.list_all_open_tasks()
+    assert "[category:: Маркетинг]" in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_setcategory_off_removes_tag(task_service):
+    await task_service.add_task("Сдать отчёт")
+    await _run_setcategory(task_service, "1 Маркетинг")
+
+    reply = await _run_setcategory(task_service, "1 off")
+    assert "убран" in reply
+
+    tasks = await task_service.list_all_open_tasks()
+    assert "[category::" not in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_setcategory_reports_missing_index(task_service):
+    reply = await _run_setcategory(task_service, "42 Маркетинг")
+    assert "Не нашёл" in reply
+
+
+def test_has_valid_setcategory_args():
+    assert _has_valid_setcategory_args("1 Маркетинг") is True
+    assert _has_valid_setcategory_args("1 off") is True
+    assert _has_valid_setcategory_args("1") is False  # missing category
+    assert _has_valid_setcategory_args("Маркетинг") is False  # missing index
+    assert _has_valid_setcategory_args("") is False
 
 
 @pytest.mark.asyncio

@@ -24,12 +24,16 @@ DONE_MARKER = "✅ "
 _DONE_TIMESTAMP_PATTERN = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}"
 _DONE_TIMESTAMP_RE = re.compile(rf"{re.escape(DONE_MARKER)}({_DONE_TIMESTAMP_PATTERN})$")
 
-# Deadline tag, optional per task: "@2026-09-20" anywhere in the task text.
-DEADLINE_TAG_RE = re.compile(r"@(\d{4}-\d{2}-\d{2})")
+# Deadline tag, optional per task: Dataview/Tasks-plugin inline field syntax,
+# e.g. "[due:: 2026-09-20]" anywhere in the task text. This lets Obsidian's
+# Dataview plugin read task.due natively, without a DataviewJS parser.
+DEADLINE_TAG_RE = re.compile(r"\[due::\s*(\d{4}-\d{2}-\d{2})\s*\]", re.IGNORECASE)
 
-# Priority tag, optional per task: "!высокий" etc. Levels and numbering match
-# the scale from Victor's own office task table (0 FYI .. 5 План) rather than
-# an invented scheme, so it's familiar and the two stay compatible.
+# Priority tag, optional per task: "[priority:: N]" where N is the 0-5 index
+# below (not the word) — Dataview's SORT is a plain string/number sort, and a
+# number sorts by actual urgency while a word would sort alphabetically.
+# Levels and numbering match the scale from Victor's own office task table
+# (0 FYI .. 5 План) rather than an invented scheme, so it's familiar.
 PRIORITY_LEVELS: tuple[str, ...] = ("fyi", "критический", "высокий", "средний", "низкий", "план")
 PRIORITY_LABELS: dict[str, str] = {
     "fyi": "FYI",
@@ -54,7 +58,15 @@ PRIORITY_URGENCY: dict[str, int] = {
 # Rank used for tasks with no priority tag at all — worse than any explicit
 # actionable priority, but still better than an explicit "FYI" tag.
 UNTAGGED_PRIORITY_URGENCY = 5
-PRIORITY_TAG_RE = re.compile(r"!(" + "|".join(PRIORITY_LEVELS) + r")\b", re.IGNORECASE)
+PRIORITY_TAG_RE = re.compile(r"\[priority::\s*([0-5])\s*\]", re.IGNORECASE)
+
+# Category tag, optional per task: "[category:: Раздел]" — written automatically
+# from the LLM's classification (mirrors the "## Раздел" section header the
+# task also lives under) and overridable via /setcategory. Kept separate from
+# the section header so Dataview can read task.category without needing
+# task.header, and so a manual override doesn't require moving the line
+# between sections.
+CATEGORY_TAG_RE = re.compile(r"\[category::\s*([^\]]+?)\s*\]", re.IGNORECASE)
 
 
 def extract_deadline(text: str) -> date | None:
@@ -69,7 +81,17 @@ def extract_deadline(text: str) -> date | None:
 
 def extract_priority(text: str) -> str | None:
     match = PRIORITY_TAG_RE.search(text)
-    return match.group(1).lower() if match else None
+    if not match:
+        return None
+    index = int(match.group(1))
+    if 0 <= index < len(PRIORITY_LEVELS):
+        return PRIORITY_LEVELS[index]
+    return None
+
+
+def extract_category(text: str) -> str | None:
+    match = CATEGORY_TAG_RE.search(text)
+    return match.group(1).strip() or None if match else None
 
 
 def parse_priority_input(raw_value: str) -> str | None:
@@ -176,23 +198,34 @@ class TaskStore:
             return await asyncio.to_thread(self._list_completed_since_sync, since)
 
     async def set_deadline(self, index: int, deadline: date | None) -> bool:
-        """Set (or, with ``deadline=None``, remove) the ``@ГГГГ-ММ-ДД`` tag on
-        the *index*-th open task. Deadlines are per-task and optional — most
-        tasks have none, which is expected, not an error state.
+        """Set (or, with ``deadline=None``, remove) the ``[due:: ГГГГ-ММ-ДД]``
+        tag on the *index*-th open task. Deadlines are per-task and optional —
+        most tasks have none, which is expected, not an error state.
         """
-        new_tag = f"@{deadline.isoformat()}" if deadline is not None else None
+        new_tag = f"[due:: {deadline.isoformat()}]" if deadline is not None else None
         async with self._lock:
             return await asyncio.to_thread(self._set_tag_sync, index, DEADLINE_TAG_RE, new_tag)
 
     async def set_priority(self, index: int, priority: str | None) -> bool:
-        """Set (or, with ``priority=None``, remove) the ``!уровень`` tag on
-        the *index*-th open task. *priority* must be a canonical level from
-        ``PRIORITY_LEVELS`` (use ``parse_priority_input`` to get one from
-        free-form user input).
+        """Set (or, with ``priority=None``, remove) the ``[priority:: N]`` tag
+        on the *index*-th open task, where N is *priority*'s 0-5 index in
+        ``PRIORITY_LEVELS`` (use ``parse_priority_input`` to get a canonical
+        level from free-form user input). Stored as a number, not the word,
+        so Dataview's SORT sorts by actual urgency rather than alphabetically.
         """
-        new_tag = f"!{priority}" if priority is not None else None
+        priority_index = PRIORITY_LEVELS.index(priority) if priority is not None else None
+        new_tag = f"[priority:: {priority_index}]" if priority_index is not None else None
         async with self._lock:
             return await asyncio.to_thread(self._set_tag_sync, index, PRIORITY_TAG_RE, new_tag)
+
+    async def set_category(self, index: int, category: str | None) -> bool:
+        """Set (or, with ``category=None``, remove) the ``[category:: ...]``
+        tag on the *index*-th open task — a manual override of whatever the
+        LLM filed the task under when it was created.
+        """
+        new_tag = f"[category:: {category}]" if category is not None else None
+        async with self._lock:
+            return await asyncio.to_thread(self._set_tag_sync, index, CATEGORY_TAG_RE, new_tag)
 
     # ── sync helpers (always called via asyncio.to_thread) ──────────────────
 

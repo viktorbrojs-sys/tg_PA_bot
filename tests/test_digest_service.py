@@ -45,12 +45,15 @@ async def test_morning_digest_prefers_higher_priority_task_as_main(task_service,
     await task_service.set_priority(2, "критический")  # second task, but most urgent
 
     text = await digest.build_morning_digest()
-    assert "Главная задача дня: 2026-09-09 10:00 Закончить отчёт !критический" in text
+    assert (
+        "Главная задача дня: 2026-09-09 10:00 Закончить отчёт "
+        "[category:: Входящие] [priority:: 1]" in text
+    )
 
 
 @pytest.mark.asyncio
 async def test_morning_digest_flags_overdue_tasks(task_service, digest):
-    await task_service.add_task("Сдать отчёт @2026-09-08")  # yesterday relative to FIXED_NOW
+    await task_service.add_task("Сдать отчёт [due:: 2026-09-08]")  # yesterday relative to FIXED_NOW
     await task_service.add_task("Задача без дедлайна")
 
     text = await digest.build_morning_digest()
@@ -60,7 +63,7 @@ async def test_morning_digest_flags_overdue_tasks(task_service, digest):
 
 @pytest.mark.asyncio
 async def test_morning_digest_ignores_future_deadlines(task_service, digest):
-    await task_service.add_task("Задача на будущее @2026-12-31")
+    await task_service.add_task("Задача на будущее [due:: 2026-12-31]")
 
     text = await digest.build_morning_digest()
     assert "Просрочено" not in text
@@ -236,15 +239,19 @@ def test_pick_main_task_defaults_to_first_when_none_tagged():
 
 
 def test_pick_main_task_prefers_most_urgent_tag():
-    tasks = ["обычная !низкий", "срочная !критический", "средняя !средний"]
-    assert _pick_main_task(tasks) == "срочная !критический"
+    tasks = [
+        "обычная [priority:: 4]",
+        "срочная [priority:: 1]",
+        "средняя [priority:: 3]",
+    ]
+    assert _pick_main_task(tasks) == "срочная [priority:: 1]"
 
 
 def test_pick_main_task_ranks_fyi_last_despite_being_index_zero():
-    tasks = ["информационная !fyi", "обычная без тега"]
+    tasks = ["информационная [priority:: 0]", "обычная без тега"]
     assert _pick_main_task(tasks) == "обычная без тега"
 
 
 def test_pick_main_task_ties_broken_by_original_order():
-    tasks = ["первая !высокий", "вторая !высокий"]
-    assert _pick_main_task(tasks) == "первая !высокий"
+    tasks = ["первая [priority:: 2]", "вторая [priority:: 2]"]
+    assert _pick_main_task(tasks) == "первая [priority:: 2]"
