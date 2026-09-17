@@ -4,7 +4,7 @@ import pytest
 from integrations.google_calendar import CalendarClient, CalendarEvent
 from integrations.llm_client import NullLLMClient
 from integrations.weather_client import DailyWeather
-from services.digest_service import DigestService
+from services.digest_service import DigestService, _pick_main_task
 from services.task_service import TaskService
 from storage import TaskStore
 
@@ -36,6 +36,16 @@ async def test_morning_digest_lists_open_count_and_main_task(task_service, diges
     text = await digest.build_morning_digest()
     assert "Открытых задач: 2" in text
     assert "Закончить презентацию" in text  # first task = "main task of the day"
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_prefers_higher_priority_task_as_main(task_service, digest):
+    await task_service.add_task("Купить молоко")  # added first, no priority
+    await task_service.add_task("Закончить отчёт")
+    await task_service.set_priority(2, "критический")  # second task, but most urgent
+
+    text = await digest.build_morning_digest()
+    assert "Главная задача дня: 2026-09-09 10:00 Закончить отчёт !критический" in text
 
 
 @pytest.mark.asyncio
@@ -218,3 +228,23 @@ async def test_morning_digest_shows_weather_even_with_no_open_tasks(tmp_path):
     text = await digest.build_morning_digest()
     assert "Открытых задач нет" in text
     assert "Погода" in text
+
+
+def test_pick_main_task_defaults_to_first_when_none_tagged():
+    tasks = ["первая", "вторая", "третья"]
+    assert _pick_main_task(tasks) == "первая"
+
+
+def test_pick_main_task_prefers_most_urgent_tag():
+    tasks = ["обычная !низкий", "срочная !критический", "средняя !средний"]
+    assert _pick_main_task(tasks) == "срочная !критический"
+
+
+def test_pick_main_task_ranks_fyi_last_despite_being_index_zero():
+    tasks = ["информационная !fyi", "обычная без тега"]
+    assert _pick_main_task(tasks) == "обычная без тега"
+
+
+def test_pick_main_task_ties_broken_by_original_order():
+    tasks = ["первая !высокий", "вторая !высокий"]
+    assert _pick_main_task(tasks) == "первая !высокий"

@@ -9,7 +9,6 @@ feature existed.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -21,28 +20,35 @@ from integrations.weather_client import (
     WeatherClient,
     describe_weather_code,
 )
+from storage import PRIORITY_URGENCY, UNTAGGED_PRIORITY_URGENCY, extract_deadline, extract_priority
 
 from services.task_service import TaskService
-
-# Matches the deadline tag convention from the feature list: "@2026-09-10".
-_DEADLINE_RE = re.compile(r"@(\d{4}-\d{2}-\d{2})")
 
 WEEKLY_REVIEW_WINDOW = timedelta(days=7)
 
 
-def _extract_deadline(task_text: str) -> date | None:
-    match = _DEADLINE_RE.search(task_text)
-    if not match:
-        return None
-    try:
-        return date.fromisoformat(match.group(1))
-    except ValueError:
-        return None
-
-
 def _is_overdue(task_text: str, today: date) -> bool:
-    deadline = _extract_deadline(task_text)
+    deadline = extract_deadline(task_text)
     return deadline is not None and deadline <= today
+
+
+def _pick_main_task(tasks: list[str]) -> str:
+    """Pick the task to call out as "главная задача дня".
+
+    Prefers the most urgent priority tag present (see PRIORITY_URGENCY —
+    note this is NOT the same order as the 0-5 numbering, since "FYI" is
+    informational, ranking below even an untagged task). ``min()`` returns
+    the first item on ties, so with no priorities tagged at all this is
+    exactly the old "just take the first task" behaviour.
+    """
+
+    def urgency(task: str) -> int:
+        priority = extract_priority(task)
+        if priority is None:
+            return UNTAGGED_PRIORITY_URGENCY
+        return PRIORITY_URGENCY.get(priority, UNTAGGED_PRIORITY_URGENCY)
+
+    return min(tasks, key=urgency)
 
 
 class DigestService:
@@ -84,7 +90,7 @@ class DigestService:
             lines.extend(f"  • {t}" for t in overdue[:5])
         if events_text:
             lines.append(events_text)
-        lines.append(f"\nГлавная задача дня: {tasks[0]}")
+        lines.append(f"\nГлавная задача дня: {_pick_main_task(tasks)}")
         return "\n".join(lines)
 
     async def build_evening_prompt(self) -> str:

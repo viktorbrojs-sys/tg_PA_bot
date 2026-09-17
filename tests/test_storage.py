@@ -1,7 +1,8 @@
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
+import storage
 from storage import TaskStore
 
 FIXED_NOW = datetime(2026, 9, 7, 14, 32)
@@ -172,3 +173,118 @@ async def test_list_completed_since_ignores_legacy_done_tasks_without_timestamp(
 
     completed = await store.list_completed_since(datetime(2020, 1, 1))
     assert completed == []
+
+
+@pytest.mark.asyncio
+async def test_set_deadline_appends_tag(store):
+    await store.add_task("Сдать отчёт")
+
+    ok = await store.set_deadline(1, date(2026, 9, 20))
+    assert ok is True
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт @2026-09-20"]
+
+
+@pytest.mark.asyncio
+async def test_set_deadline_replaces_existing_tag(store):
+    await store.add_task("Сдать отчёт")
+    await store.set_deadline(1, date(2026, 9, 20))
+
+    await store.set_deadline(1, date(2026, 10, 1))
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт @2026-10-01"]
+
+
+@pytest.mark.asyncio
+async def test_set_deadline_none_removes_tag(store):
+    await store.add_task("Сдать отчёт")
+    await store.set_deadline(1, date(2026, 9, 20))
+
+    await store.set_deadline(1, None)
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт"]
+
+
+@pytest.mark.asyncio
+async def test_set_deadline_out_of_range_index_returns_false(store):
+    await store.add_task("Сдать отчёт")
+    assert await store.set_deadline(99, date(2026, 9, 20)) is False
+
+
+@pytest.mark.asyncio
+async def test_set_priority_appends_tag(store):
+    await store.add_task("Сдать отчёт")
+
+    ok = await store.set_priority(1, "критический")
+    assert ok is True
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт !критический"]
+
+
+@pytest.mark.asyncio
+async def test_set_priority_replaces_existing_tag(store):
+    await store.add_task("Сдать отчёт")
+    await store.set_priority(1, "низкий")
+
+    await store.set_priority(1, "высокий")
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт !высокий"]
+
+
+@pytest.mark.asyncio
+async def test_set_priority_none_removes_tag(store):
+    await store.add_task("Сдать отчёт")
+    await store.set_priority(1, "высокий")
+
+    await store.set_priority(1, None)
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт"]
+
+
+@pytest.mark.asyncio
+async def test_deadline_and_priority_tags_coexist(store):
+    await store.add_task("Сдать отчёт")
+    await store.set_deadline(1, date(2026, 9, 20))
+    await store.set_priority(1, "критический")
+
+    tasks = await store.list_open_tasks()
+    assert tasks == ["2026-09-07 14:32 Сдать отчёт @2026-09-20 !критический"]
+
+
+def test_extract_deadline_parses_tag():
+    assert storage.extract_deadline("Сдать отчёт @2026-09-20") == date(2026, 9, 20)
+
+
+def test_extract_deadline_returns_none_without_tag():
+    assert storage.extract_deadline("Обычная задача") is None
+
+
+def test_extract_priority_is_case_insensitive():
+    assert storage.extract_priority("Задача !ВЫСОКИЙ") == "высокий"
+
+
+def test_extract_priority_returns_none_without_tag():
+    assert storage.extract_priority("Обычная задача") is None
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("0", "fyi"),
+        ("1", "критический"),
+        ("5", "план"),
+        ("высокий", "высокий"),
+        ("ВЫСОКИЙ", "высокий"),
+        ("6", None),
+        ("-1", None),
+        ("не приоритет", None),
+    ],
+)
+def test_parse_priority_input(raw, expected):
+    assert storage.parse_priority_input(raw) == expected

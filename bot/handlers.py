@@ -15,12 +15,14 @@ support two flows:
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 from services.digest_service import DigestService
 from services.pending_command_state import PendingCommandState
 from services.reflection_service import ReflectionService, ReflectionState
 from services.search_service import SearchService
 from services.task_service import TaskService
+from storage import PRIORITY_LABELS, PRIORITY_LEVELS, parse_priority_input
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -38,9 +40,15 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("plan", "Разбить сообщение на несколько задач на день"),
     ("search", "Найти информацию в заметках"),
     ("done", "Отметить задачу как выполненную (номер из /list)"),
+    ("deadline", "Установить или убрать дедлайн у задачи"),
+    ("priority", "Установить или убрать приоритет у задачи"),
     ("review", "Еженедельный обзор выполненных задач"),
     ("help", "Справка по командам"),
 ]
+
+_PRIORITY_LEVELS_HINT = ", ".join(
+    f"{i} {PRIORITY_LABELS[level]}" for i, level in enumerate(PRIORITY_LEVELS)
+)
 
 WELCOME_TEXT = (
     "👋 Бот-секретарь для Obsidian.\n\n"
@@ -51,6 +59,8 @@ WELCOME_TEXT = (
     "/plan <текст> — разбить сообщение на несколько задач на день\n"
     "/search <запрос> — найти информацию в заметках\n"
     "/done N — отметить задачу N (из /list) как выполненную\n"
+    "/deadline N ГГГГ-ММ-ДД — поставить дедлайн задаче N (необязательно для всех)\n"
+    "/priority N уровень — поставить приоритет задаче N\n"
     "/review — еженедельный обзор выполненных задач\n"
     "/help — справка\n\n"
     "Если ввести команду без параметра (например, просто /search), бот сам "
@@ -65,6 +75,10 @@ HELP_TEXT = (
     "• /plan <текст> — разбить сообщение на несколько задач одним вызовом\n"
     "• /search <запрос> — найти информацию в заметках\n"
     "• /done N — отметить N-ю задачу из /list как выполненную\n"
+    "• /deadline N ГГГГ-ММ-ДД — поставить дедлайн задаче N; /deadline N off — убрать. "
+    "Дедлайн ставится по желанию, не у каждой задачи он есть\n"
+    f"• /priority N уровень — поставить приоритет задаче N ({_PRIORITY_LEVELS_HINT}); "
+    "/priority N off — убрать\n"
     "• /review — еженедельный обзор выполненных задач (за последние 7 дней)\n"
     "• /start — приветствие\n"
     "• /help — эта справка\n\n"
@@ -210,6 +224,157 @@ def make_cmd_done(service: TaskService, pending_state: PendingCommandState):
     return cmd_done
 
 
+# ── /deadline — optional per-task deadline: <номер> <ГГГГ-ММ-ДД> or <номер> off ─
+
+_DEADLINE_OFF_VALUES = {"off", "нет", "убрать", "-"}
+
+
+async def _run_deadline(service: TaskService, raw: str) -> str:
+    parts = raw.split(maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        return (
+            "Не понял. Формат: «<номер> <ГГГГ-ММ-ДД>», например «3 2026-09-20», "
+            "или «3 off», чтобы убрать дедлайн."
+        )
+
+    index = int(parts[0])
+    value = parts[1].strip().lower()
+
+    if value in _DEADLINE_OFF_VALUES:
+        ok = await service.set_deadline(index, None)
+        if ok:
+            return f"🗓 Дедлайн у задачи {index} убран."
+        return f"⚠️ Не нашёл задачу с номером {index}. Проверьте /list."
+
+    try:
+        deadline = date.fromisoformat(parts[1].strip())
+    except ValueError:
+        return "Дата должна быть в формате ГГГГ-ММ-ДД, например 2026-09-20."
+
+    ok = await service.set_deadline(index, deadline)
+    if ok:
+        return f"🗓 Дедлайн задачи {index}: {deadline.isoformat()}."
+    return f"⚠️ Не нашёл задачу с номером {index}. Проверьте /list."
+
+
+def _has_valid_deadline_args(raw: str) -> bool:
+    parts = raw.split(maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        return False
+    value = parts[1].strip().lower()
+    if value in _DEADLINE_OFF_VALUES:
+        return True
+    try:
+        date.fromisoformat(parts[1].strip())
+    except ValueError:
+        return False
+    return True
+
+
+def make_cmd_deadline(service: TaskService, pending_state: PendingCommandState):
+    async def cmd_deadline(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        chat_id = _chat_id(update)
+        if chat_id is not None:
+            pending_state.clear(chat_id)
+
+        raw = " ".join(ctx.args or []).strip()
+        if not _has_valid_deadline_args(raw):
+            if chat_id is not None:
+                pending_state.start(chat_id, "deadline")
+            await update.message.reply_text(
+                "Какой задаче и на какую дату поставить дедлайн? Пришлите номер (из "
+                "/list) и дату через пробел, например «3 2026-09-20», или «3 off», "
+                "чтобы убрать дедлайн. Дедлайн необязателен — можно оставить как есть."
+            )
+            return
+
+        try:
+            reply = await _run_deadline(service, raw)
+        except OSError as exc:
+            logger.error("Failed to update task deadline: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(reply)
+
+    return cmd_deadline
+
+
+# ── /priority — <номер> <уровень 0-5 или слово>, or <номер> off ────────────────
+
+_PRIORITY_OFF_VALUES = {"off", "нет", "убрать", "-"}
+
+
+async def _run_priority(service: TaskService, raw: str) -> str:
+    parts = raw.split(maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        return (
+            "Не понял. Формат: «<номер> <приоритет>», например «3 высокий» или "
+            f"«3 2» ({_PRIORITY_LEVELS_HINT}). «3 off» — убрать приоритет."
+        )
+
+    index = int(parts[0])
+    value = parts[1].strip().lower()
+
+    if value in _PRIORITY_OFF_VALUES:
+        ok = await service.set_priority(index, None)
+        if ok:
+            return f"🚩 Приоритет у задачи {index} убран."
+        return f"⚠️ Не нашёл задачу с номером {index}. Проверьте /list."
+
+    level = parse_priority_input(value)
+    if level is None:
+        return f"Приоритет не распознан. Допустимо: {_PRIORITY_LEVELS_HINT}."
+
+    ok = await service.set_priority(index, level)
+    if ok:
+        return f"🚩 Приоритет задачи {index}: {PRIORITY_LABELS[level]}."
+    return f"⚠️ Не нашёл задачу с номером {index}. Проверьте /list."
+
+
+def _has_valid_priority_args(raw: str) -> bool:
+    parts = raw.split(maxsplit=1)
+    if len(parts) != 2 or not parts[0].isdigit():
+        return False
+    value = parts[1].strip().lower()
+    return value in _PRIORITY_OFF_VALUES or parse_priority_input(value) is not None
+
+
+def make_cmd_priority(service: TaskService, pending_state: PendingCommandState):
+    async def cmd_priority(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        chat_id = _chat_id(update)
+        if chat_id is not None:
+            pending_state.clear(chat_id)
+
+        raw = " ".join(ctx.args or []).strip()
+        if not _has_valid_priority_args(raw):
+            if chat_id is not None:
+                pending_state.start(chat_id, "priority")
+            await update.message.reply_text(
+                "Какой задаче и какой приоритет поставить? Пришлите номер (из /list) "
+                f"и уровень через пробел, например «3 высокий» или «3 2» "
+                f"({_PRIORITY_LEVELS_HINT}). «3 off» — убрать приоритет."
+            )
+            return
+
+        try:
+            reply = await _run_priority(service, raw)
+        except OSError as exc:
+            logger.error("Failed to update task priority: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(reply)
+
+    return cmd_priority
+
+
 # ── /plan — required free-text argument ──────────────────────────────────────
 
 
@@ -352,6 +517,10 @@ def make_handle_message(
                     reply = await _run_done(task_service, text)
                 elif command == "plan":
                     reply = await _run_plan(task_service, text)
+                elif command == "deadline":
+                    reply = await _run_deadline(task_service, text)
+                elif command == "priority":
+                    reply = await _run_priority(task_service, text)
                 else:  # pragma: no cover — defensive, all known commands handled above
                     reply = None
             except OSError as exc:

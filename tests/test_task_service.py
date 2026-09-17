@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 from services.task_service import PlannedTask, TaskService
@@ -108,3 +108,33 @@ async def test_list_completed_since_delegates_to_store(service):
     completed = await service.list_completed_since(FIXED_NOW)
     assert len(completed) == 1
     assert "Закончить отчёт" in completed[0]
+
+
+@pytest.mark.asyncio
+async def test_set_deadline_delegates_to_store(service):
+    await service.add_task("Закончить отчёт")
+
+    assert await service.set_deadline(1, date(2026, 9, 20)) is True
+    tasks = await service.list_all_open_tasks()
+    assert "@2026-09-20" in tasks[0]
+
+    assert await service.set_deadline(1, None) is True
+    tasks = await service.list_all_open_tasks()
+    assert "@2026-09-20" not in tasks[0]
+
+    assert await service.set_deadline(99, date(2026, 9, 20)) is False
+
+
+@pytest.mark.asyncio
+async def test_set_priority_delegates_to_store(service):
+    await service.add_task("Закончить отчёт")
+
+    assert await service.set_priority(1, "критический") is True
+    tasks = await service.list_all_open_tasks()
+    assert "!критический" in tasks[0]
+
+    assert await service.set_priority(1, None) is True
+    tasks = await service.list_all_open_tasks()
+    assert "!критический" not in tasks[0]
+
+    assert await service.set_priority(99, "высокий") is False

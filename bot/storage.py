@@ -11,7 +11,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,67 @@ SECTION_HEADER_PREFIX = "## "
 DONE_MARKER = "✅ "
 _DONE_TIMESTAMP_PATTERN = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}"
 _DONE_TIMESTAMP_RE = re.compile(rf"{re.escape(DONE_MARKER)}({_DONE_TIMESTAMP_PATTERN})$")
+
+# Deadline tag, optional per task: "@2026-09-20" anywhere in the task text.
+DEADLINE_TAG_RE = re.compile(r"@(\d{4}-\d{2}-\d{2})")
+
+# Priority tag, optional per task: "!высокий" etc. Levels and numbering match
+# the scale from Victor's own office task table (0 FYI .. 5 План) rather than
+# an invented scheme, so it's familiar and the two stay compatible.
+PRIORITY_LEVELS: tuple[str, ...] = ("fyi", "критический", "высокий", "средний", "низкий", "план")
+PRIORITY_LABELS: dict[str, str] = {
+    "fyi": "FYI",
+    "критический": "Критический",
+    "высокий": "Высокий",
+    "средний": "Средний",
+    "низкий": "Низкий",
+    "план": "План",
+}
+# Urgency for picking the "main task of the day" — deliberately NOT the same
+# order as PRIORITY_LEVELS: "FYI" is index 0 in Victor's numbering but is
+# informational only, so it must rank as the LEAST urgent of all, even below
+# an untagged task (which has no signal either way, so it sits in the middle).
+PRIORITY_URGENCY: dict[str, int] = {
+    "критический": 0,
+    "высокий": 1,
+    "средний": 2,
+    "низкий": 3,
+    "план": 4,
+    "fyi": 6,
+}
+# Rank used for tasks with no priority tag at all — worse than any explicit
+# actionable priority, but still better than an explicit "FYI" tag.
+UNTAGGED_PRIORITY_URGENCY = 5
+PRIORITY_TAG_RE = re.compile(r"!(" + "|".join(PRIORITY_LEVELS) + r")\b", re.IGNORECASE)
+
+
+def extract_deadline(text: str) -> date | None:
+    match = DEADLINE_TAG_RE.search(text)
+    if not match:
+        return None
+    try:
+        return date.fromisoformat(match.group(1))
+    except ValueError:
+        return None
+
+
+def extract_priority(text: str) -> str | None:
+    match = PRIORITY_TAG_RE.search(text)
+    return match.group(1).lower() if match else None
+
+
+def parse_priority_input(raw_value: str) -> str | None:
+    """Accept either a level word or its 0-5 index (Victor's own numbering:
+    0 FYI, 1 Критический, 2 Высокий, 3 Средний, 4 Низкий, 5 План). Returns
+    the canonical lowercase level, or None if unrecognised.
+    """
+    value = raw_value.strip().lower()
+    if value.isdigit():
+        index = int(value)
+        if 0 <= index < len(PRIORITY_LEVELS):
+            return PRIORITY_LEVELS[index]
+        return None
+    return value if value in PRIORITY_LABELS else None
 
 
 def _insert_into_section(lines: list[str], section: str, new_line: str) -> list[str]:
@@ -114,6 +175,25 @@ class TaskStore:
         async with self._lock:
             return await asyncio.to_thread(self._list_completed_since_sync, since)
 
+    async def set_deadline(self, index: int, deadline: date | None) -> bool:
+        """Set (or, with ``deadline=None``, remove) the ``@ГГГГ-ММ-ДД`` tag on
+        the *index*-th open task. Deadlines are per-task and optional — most
+        tasks have none, which is expected, not an error state.
+        """
+        new_tag = f"@{deadline.isoformat()}" if deadline is not None else None
+        async with self._lock:
+            return await asyncio.to_thread(self._set_tag_sync, index, DEADLINE_TAG_RE, new_tag)
+
+    async def set_priority(self, index: int, priority: str | None) -> bool:
+        """Set (or, with ``priority=None``, remove) the ``!уровень`` tag on
+        the *index*-th open task. *priority* must be a canonical level from
+        ``PRIORITY_LEVELS`` (use ``parse_priority_input`` to get one from
+        free-form user input).
+        """
+        new_tag = f"!{priority}" if priority is not None else None
+        async with self._lock:
+            return await asyncio.to_thread(self._set_tag_sync, index, PRIORITY_TAG_RE, new_tag)
+
     # ── sync helpers (always called via asyncio.to_thread) ──────────────────
 
     def _ensure_file(self) -> None:
@@ -161,6 +241,25 @@ class TaskStore:
         task_text = lines[line_no][len(TASK_PREFIX):]
         completed_at = self._now().strftime(TIMESTAMP_FORMAT)
         lines[line_no] = f"{DONE_PREFIX}{task_text} {DONE_MARKER}{completed_at}"
+        self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return True
+
+    def _set_tag_sync(self, index: int, tag_re: re.Pattern[str], new_tag: str | None) -> bool:
+        """Replace whatever *tag_re* currently matches in the task's text with
+        *new_tag* (or remove it entirely if *new_tag* is None). Shared by
+        ``set_deadline`` and ``set_priority`` — same shape, different tag.
+        """
+        lines = self._read_lines()
+        open_positions = [i for i, line in enumerate(lines) if line.startswith(TASK_PREFIX)]
+        if index < 1 or index > len(open_positions):
+            return False
+
+        line_no = open_positions[index - 1]
+        text = lines[line_no][len(TASK_PREFIX):]
+        without_tag = re.sub(r"\s*" + tag_re.pattern, "", text, flags=re.IGNORECASE).strip()
+        if new_tag is not None:
+            without_tag = f"{without_tag} {new_tag}".strip()
+        lines[line_no] = f"{TASK_PREFIX}{without_tag}"
         self.path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return True
 

@@ -1,7 +1,16 @@
 from datetime import datetime
 
 import pytest
-from handlers import BOT_COMMANDS, _run_done, _run_plan, _run_search
+from handlers import (
+    BOT_COMMANDS,
+    _has_valid_deadline_args,
+    _has_valid_priority_args,
+    _run_deadline,
+    _run_done,
+    _run_plan,
+    _run_priority,
+    _run_search,
+)
 from integrations.llm_client import NullLLMClient
 from services.search_service import SearchService
 from services.task_service import TaskService
@@ -63,4 +72,103 @@ async def test_run_search_delegates_to_search_service(store):
 
 def test_bot_commands_include_all_parameterised_commands():
     names = {command for command, _ in BOT_COMMANDS}
-    assert {"search", "done", "plan"} <= names
+    assert {"search", "done", "plan", "deadline", "priority"} <= names
+
+
+@pytest.mark.asyncio
+async def test_run_deadline_sets_tag(task_service):
+    await task_service.add_task("Сдать отчёт")
+
+    reply = await _run_deadline(task_service, "1 2026-09-20")
+    assert "2026-09-20" in reply
+
+    tasks = await task_service.list_all_open_tasks()
+    assert "@2026-09-20" in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_deadline_off_removes_tag(task_service):
+    await task_service.add_task("Сдать отчёт")
+    await _run_deadline(task_service, "1 2026-09-20")
+
+    reply = await _run_deadline(task_service, "1 off")
+    assert "убран" in reply
+
+    tasks = await task_service.list_all_open_tasks()
+    assert "@2026-09-20" not in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_deadline_rejects_bad_date(task_service):
+    await task_service.add_task("Сдать отчёт")
+    reply = await _run_deadline(task_service, "1 не дата")
+    assert "формат" in reply.lower() or "ГГГГ-ММ-ДД" in reply
+
+
+@pytest.mark.asyncio
+async def test_run_deadline_reports_missing_index(task_service):
+    reply = await _run_deadline(task_service, "42 2026-09-20")
+    assert "Не нашёл" in reply
+
+
+def test_has_valid_deadline_args():
+    assert _has_valid_deadline_args("1 2026-09-20") is True
+    assert _has_valid_deadline_args("1 off") is True
+    assert _has_valid_deadline_args("1 не дата") is False
+    assert _has_valid_deadline_args("2026-09-20") is False  # missing index
+    assert _has_valid_deadline_args("") is False
+
+
+@pytest.mark.asyncio
+async def test_run_priority_sets_tag_by_word(task_service):
+    await task_service.add_task("Сдать отчёт")
+
+    reply = await _run_priority(task_service, "1 высокий")
+    assert "Высокий" in reply
+
+    tasks = await task_service.list_all_open_tasks()
+    assert "!высокий" in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_priority_sets_tag_by_number(task_service):
+    await task_service.add_task("Сдать отчёт")
+
+    reply = await _run_priority(task_service, "1 1")
+    assert "Критический" in reply
+
+    tasks = await task_service.list_all_open_tasks()
+    assert "!критический" in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_priority_off_removes_tag(task_service):
+    await task_service.add_task("Сдать отчёт")
+    await _run_priority(task_service, "1 высокий")
+
+    reply = await _run_priority(task_service, "1 off")
+    assert "убран" in reply
+
+    tasks = await task_service.list_all_open_tasks()
+    assert "!высокий" not in tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_run_priority_rejects_unknown_level(task_service):
+    await task_service.add_task("Сдать отчёт")
+    reply = await _run_priority(task_service, "1 суперважно")
+    assert "не распознан" in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_run_priority_reports_missing_index(task_service):
+    reply = await _run_priority(task_service, "42 высокий")
+    assert "Не нашёл" in reply
+
+
+def test_has_valid_priority_args():
+    assert _has_valid_priority_args("1 высокий") is True
+    assert _has_valid_priority_args("1 2") is True
+    assert _has_valid_priority_args("1 off") is True
+    assert _has_valid_priority_args("1 суперважно") is False
+    assert _has_valid_priority_args("высокий") is False  # missing index

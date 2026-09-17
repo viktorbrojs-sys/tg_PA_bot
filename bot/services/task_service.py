@@ -9,7 +9,7 @@ python-telegram-bot at all.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from integrations.llm_client import LLMClient
 from storage import TaskStore
@@ -65,3 +65,9 @@ class TaskService:
 
     async def list_completed_since(self, since: datetime) -> list[str]:
         return await self._store.list_completed_since(since)
+
+    async def set_deadline(self, index: int, deadline: date | None) -> bool:
+        return await self._store.set_deadline(index, deadline)
+
+    async def set_priority(self, index: int, priority: str | None) -> bool:
+        return await self._store.set_priority(index, priority)
