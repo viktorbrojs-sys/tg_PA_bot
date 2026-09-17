@@ -1,9 +1,10 @@
 """Morning digest / evening reflection prompt / weekly review generation.
 
-Weather/traffic are still a separate future integration. Calendar events are
-optional — pass a real ``CalendarClient`` to include today's meetings in the
-morning digest; without one (``NullCalendarClient``, the default), the
-digest is exactly what it was before this feature existed.
+Traffic is still a separate future integration (needs a keyed API, unlike
+weather/calendar). Weather and calendar events are both optional — pass a
+real client to include them in the morning digest; without one (the
+Null* fallback, the default), the digest is exactly what it was before that
+feature existed.
 """
 
 from __future__ import annotations
@@ -14,6 +15,12 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from integrations.google_calendar import CalendarClient, NullCalendarClient
+from integrations.weather_client import (
+    UMBRELLA_THRESHOLD,
+    NullWeatherClient,
+    WeatherClient,
+    describe_weather_code,
+)
 
 from services.task_service import TaskService
 
@@ -43,23 +50,27 @@ class DigestService:
         self,
         task_service: TaskService,
         calendar: CalendarClient | None = None,
+        weather: WeatherClient | None = None,
         now: Callable[[], datetime] = datetime.now,
         timezone: str = "UTC",
     ) -> None:
         self._tasks = task_service
         self._calendar = calendar or NullCalendarClient()
+        self._weather = weather or NullWeatherClient()
         self._now = now
         self._tz = ZoneInfo(timezone)
 
     async def build_morning_digest(self) -> str:
         tasks = await self._tasks.list_all_open_tasks()
+        weather_line = await self._build_weather_line()
         events_text = await self._build_events_section()
 
+        lines = ["🌅 Доброе утро!"]
+        if weather_line:
+            lines.append(weather_line)
+
         if not tasks:
-            lines = [
-                "🌅 Доброе утро! Открытых задач нет — можно спланировать день "
-                "командой /plan."
-            ]
+            lines.append("Открытых задач нет — можно спланировать день командой /plan.")
             if events_text:
                 lines.append(events_text)
             return "\n".join(lines)
@@ -67,7 +78,7 @@ class DigestService:
         today = self._now().date()
         overdue = [t for t in tasks if _is_overdue(t, today)]
 
-        lines = ["🌅 Доброе утро!", f"Открытых задач: {len(tasks)}"]
+        lines.append(f"Открытых задач: {len(tasks)}")
         if overdue:
             lines.append(f"⚠️ Просрочено или истекает сегодня: {len(overdue)}")
             lines.extend(f"  • {t}" for t in overdue[:5])
@@ -113,3 +124,17 @@ class DigestService:
         lines = [f"\n📅 Встречи сегодня ({len(events)}):"]
         lines.extend(f"  • {e.start.strftime('%H:%M')} — {e.summary}" for e in events)
         return "\n".join(lines)
+
+    async def _build_weather_line(self) -> str | None:
+        weather = await self._weather.today()
+        if weather is None:
+            return None
+
+        description = describe_weather_code(weather.weather_code)
+        line = (
+            f"🌤 Погода: {description}, "
+            f"{weather.temp_min:.0f}…{weather.temp_max:.0f}°C"
+        )
+        if weather.precipitation_probability >= UMBRELLA_THRESHOLD:
+            line += f", вероятность осадков {weather.precipitation_probability}% — возьмите зонт ☔"
+        return line

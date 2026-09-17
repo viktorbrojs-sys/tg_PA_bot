@@ -21,6 +21,7 @@ from handlers import (
 )
 from integrations.google_calendar import CalendarClient, GoogleCalendarClient, NullCalendarClient
 from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
+from integrations.weather_client import NullWeatherClient, OpenMeteoClient, WeatherClient
 from scheduler.jobs import setup_scheduler
 from services.digest_service import DigestService
 from services.meeting_brief_service import MeetingBriefService, MeetingBriefState
@@ -110,14 +111,23 @@ def build_calendar_client(config: BotConfig) -> CalendarClient:
     return NullCalendarClient()
 
 
+def build_weather_client(config: BotConfig) -> WeatherClient:
+    if config.weather_latitude is not None and config.weather_longitude is not None:
+        return OpenMeteoClient(config.weather_latitude, config.weather_longitude)
+    return NullWeatherClient()
+
+
 def register_handlers(app: Application, config: BotConfig) -> None:
     store = TaskStore(config.obsidian_file)
     llm = build_llm_client(config)
     calendar = build_calendar_client(config)
+    weather = build_weather_client(config)
 
     task_service = TaskService(store, llm, sections=config.task_sections)
     search_service = SearchService(store, llm)
-    digest_service = DigestService(task_service, calendar=calendar, timezone=config.timezone)
+    digest_service = DigestService(
+        task_service, calendar=calendar, weather=weather, timezone=config.timezone
+    )
     reflection_state = ReflectionState()
     reflection_service = ReflectionService(task_service, llm)
     pending_state = PendingCommandState()

@@ -49,6 +49,8 @@ class BotConfig:
     google_calendar_refresh_token: str | None
     google_calendar_id: str
     meeting_brief_lead_minutes: int
+    weather_latitude: float | None
+    weather_longitude: float | None
 
     @property
     def has_allowlist(self) -> bool:
@@ -65,6 +67,10 @@ class BotConfig:
             and self.google_calendar_client_secret
             and self.google_calendar_refresh_token
         )
+
+    @property
+    def has_weather(self) -> bool:
+        return self.weather_latitude is not None and self.weather_longitude is not None
 
 
 def _resolve_obsidian_file() -> Path:
@@ -149,6 +155,21 @@ def _resolve_positive_int(env_var: str, default: int) -> int:
     return default
 
 
+def _resolve_coordinate(env_var: str, min_value: float, max_value: float) -> float | None:
+    raw = os.environ.get(env_var, "").strip()
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r (not a number)", env_var, raw)
+        return None
+    if not (min_value <= value <= max_value):
+        logger.warning("Ignoring out-of-range %s=%r", env_var, raw)
+        return None
+    return value
+
+
 def _validate_obsidian_file(path: Path) -> str | None:
     """Return an error message if the tasks file cannot possibly be written, else None."""
     if path.exists() and path.is_dir():
@@ -227,12 +248,15 @@ def load_config() -> BotConfig | None:
         meeting_brief_lead_minutes=_resolve_positive_int(
             "MEETING_BRIEF_LEAD_MINUTES", DEFAULT_MEETING_BRIEF_LEAD_MINUTES
         ),
+        weather_latitude=_resolve_coordinate("WEATHER_LATITUDE", -90.0, 90.0),
+        weather_longitude=_resolve_coordinate("WEATHER_LONGITUDE", -180.0, 180.0),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
     logger.info(
         "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s "
-        "chat_id=%s digest=%s reflection=%s weekly_review=%s %s tz=%s calendar=%s",
+        "chat_id=%s digest=%s reflection=%s weekly_review=%s %s tz=%s "
+        "calendar=%s weather=%s",
         env_source,
         config.obsidian_file,
         sorted(config.allowed_user_ids) or "disabled",
@@ -245,5 +269,6 @@ def load_config() -> BotConfig | None:
         config.weekly_review_time,
         config.timezone,
         "google" if config.has_calendar else "disabled",
+        "open-meteo" if config.has_weather else "disabled",
     )
     return config

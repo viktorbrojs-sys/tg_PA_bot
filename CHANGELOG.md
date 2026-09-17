@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.7.0 — weather in the morning digest (Open-Meteo, no key)
+
+### Added
+- **`integrations/weather_client.py`** — `WeatherClient` abstraction,
+  `OpenMeteoClient` (free, keyless forecast API) and `NullWeatherClient`
+  fallback, same pattern as the other integrations.
+- **Утренний дайджест** теперь показывает погоду на сегодня (краткое
+  описание, диапазон температур), если координаты настроены — раздел просто
+  не появляется без них. При вероятности осадков ≥40% дайджест подсказывает
+  взять зонт.
+- Конфиг: `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, свойство
+  `BotConfig.has_weather` (обе координаты обязательны вместе).
+- `README.md`/`USER_GUIDE.md`/`.env.example` — раздел настройки погоды (где
+  взять координаты).
+- 15 новых тестов (парсинг прогноза, мок HTTP, интеграция в дайджест,
+  резолвер координат); итого 108, ruff+mypy чистые.
+
 ## 1.6.0 — Google Calendar (read-only): events in digest, meeting prep
 
 ### Added

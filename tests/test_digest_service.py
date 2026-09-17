@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from integrations.google_calendar import CalendarClient, CalendarEvent
 from integrations.llm_client import NullLLMClient
+from integrations.weather_client import DailyWeather
 from services.digest_service import DigestService
 from services.task_service import TaskService
 from storage import TaskStore
@@ -148,3 +149,72 @@ async def test_morning_digest_shows_events_even_with_no_open_tasks(tmp_path):
     text = await digest.build_morning_digest()
     assert "Открытых задач нет" in text
     assert "Утренняя встреча" in text
+
+
+class FakeWeatherClient:
+    def __init__(self, weather: DailyWeather | None) -> None:
+        self._weather = weather
+
+    async def today(self) -> DailyWeather | None:
+        return self._weather
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_includes_weather_line(task_service):
+    weather = DailyWeather(
+        date=FIXED_NOW.date(),
+        temp_min=12.0,
+        temp_max=20.0,
+        precipitation_probability=10,
+        weather_code=0,
+    )
+    digest = DigestService(task_service, weather=FakeWeatherClient(weather), now=lambda: FIXED_NOW)
+
+    text = await digest.build_morning_digest()
+    assert "Погода: ясно" in text
+    assert "12" in text and "20" in text
+    assert "зонт" not in text  # low precipitation probability
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_suggests_umbrella_on_high_precipitation(task_service):
+    weather = DailyWeather(
+        date=FIXED_NOW.date(),
+        temp_min=10.0,
+        temp_max=15.0,
+        precipitation_probability=70,
+        weather_code=61,
+    )
+    digest = DigestService(task_service, weather=FakeWeatherClient(weather), now=lambda: FIXED_NOW)
+
+    text = await digest.build_morning_digest()
+    assert "зонт" in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_without_weather_configured_has_no_weather_line(digest):
+    text = await digest.build_morning_digest()
+    assert "Погода" not in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_shows_weather_even_with_no_open_tasks(tmp_path):
+    empty_task_service = TaskService(
+        TaskStore(tmp_path / "tasks.md", now=lambda: FIXED_NOW),
+        NullLLMClient(),
+        sections=("Работа",),
+    )
+    weather = DailyWeather(
+        date=FIXED_NOW.date(),
+        temp_min=5.0,
+        temp_max=8.0,
+        precipitation_probability=5,
+        weather_code=3,
+    )
+    digest = DigestService(
+        empty_task_service, weather=FakeWeatherClient(weather), now=lambda: FIXED_NOW
+    )
+
+    text = await digest.build_morning_digest()
+    assert "Открытых задач нет" in text
+    assert "Погода" in text

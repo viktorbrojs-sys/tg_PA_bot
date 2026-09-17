@@ -47,6 +47,8 @@ def test_load_config_success(monkeypatch, tmp_path):
     monkeypatch.delenv("GOOGLE_CALENDAR_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_CALENDAR_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("GOOGLE_CALENDAR_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("WEATHER_LATITUDE", raising=False)
+    monkeypatch.delenv("WEATHER_LONGITUDE", raising=False)
     monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
 
     cfg = config.load_config()
@@ -65,6 +67,7 @@ def test_load_config_success(monkeypatch, tmp_path):
     assert cfg.has_calendar is False
     assert cfg.google_calendar_id == config.DEFAULT_GOOGLE_CALENDAR_ID
     assert cfg.meeting_brief_lead_minutes == config.DEFAULT_MEETING_BRIEF_LEAD_MINUTES
+    assert cfg.has_weather is False
 
 
 def test_resolve_task_sections_parses_and_trims(monkeypatch):
@@ -146,3 +149,40 @@ def test_has_calendar_requires_all_three_credentials(monkeypatch, tmp_path):
     cfg = config.load_config()
     assert cfg is not None
     assert cfg.has_calendar is True
+
+
+def test_resolve_coordinate_accepts_valid_value(monkeypatch):
+    monkeypatch.setenv("WEATHER_LATITUDE", "55.75")
+    assert config._resolve_coordinate("WEATHER_LATITUDE", -90.0, 90.0) == 55.75
+
+
+def test_resolve_coordinate_rejects_out_of_range(monkeypatch):
+    monkeypatch.setenv("WEATHER_LATITUDE", "200")
+    assert config._resolve_coordinate("WEATHER_LATITUDE", -90.0, 90.0) is None
+
+
+def test_resolve_coordinate_rejects_non_numeric(monkeypatch):
+    monkeypatch.setenv("WEATHER_LATITUDE", "not-a-number")
+    assert config._resolve_coordinate("WEATHER_LATITUDE", -90.0, 90.0) is None
+
+
+def test_resolve_coordinate_none_when_empty(monkeypatch):
+    monkeypatch.delenv("WEATHER_LATITUDE", raising=False)
+    assert config._resolve_coordinate("WEATHER_LATITUDE", -90.0, 90.0) is None
+
+
+def test_has_weather_requires_both_coordinates(monkeypatch, tmp_path):
+    monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
+    monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "tasks.md"))
+    monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
+
+    monkeypatch.setenv("WEATHER_LATITUDE", "55.75")
+    monkeypatch.delenv("WEATHER_LONGITUDE", raising=False)
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.has_weather is False
+
+    monkeypatch.setenv("WEATHER_LONGITUDE", "37.62")
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.has_weather is True
