@@ -164,6 +164,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     app.bot_data["reflection_state"] = reflection_state
     app.bot_data["meeting_brief_service"] = meeting_brief_service
     app.bot_data["embeddings"] = build_embedding_client(config)
+    app.bot_data["search_service"] = search_service
 
     if config.has_allowlist:
         app.add_handler(TypeHandler(Update, make_access_guard(config.allowed_user_ids)), group=-1)
@@ -230,6 +231,8 @@ def build_app(config: BotConfig) -> Application:
             else:
                 vault_index = VaultIndex(config.vault_index_db_path, embedding_dim=len(probe[0]))
                 app.bot_data["vault_index"] = vault_index
+                search_service: SearchService = app.bot_data["search_service"]
+                search_service.enable_semantic_search(vault_index, embeddings)
 
         app.bot_data["scheduler"] = setup_scheduler(
             app,
