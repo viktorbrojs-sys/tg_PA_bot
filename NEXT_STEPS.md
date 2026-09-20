@@ -92,16 +92,18 @@ python-telegram-bot.
 
 ### Чеклист блоков
 
-- [x] **A — конфигурация.** `BotConfig.obsidian_vault_path` (`OBSIDIAN_VAULT_PATH`,
-  опционально, должен существовать — не создаём как `OBSIDIAN_FILE`),
-  `has_vault_index`, `ollama_base_url`/`ollama_embed_model`
-  (`OLLAMA_BASE_URL`/`OLLAMA_EMBED_MODEL`, дефолты `http://localhost:11434` /
-  `nomic-embed-text`), `vault_reindex_interval_minutes`
-  (`VAULT_REINDEX_INTERVAL_MINUTES`, дефолт 60). Тесты в `test_config.py`.
-  167 тестов, mypy/ruff чисто. **Коммит ещё не сделан** — код в рабочей копии.
-- [ ] **B — сканирование и чанкинг vault.** `vault_scanner.py`: обход `.md`,
-  игнор `.obsidian/`/`.trash/`, резка по `##`-заголовкам, метаданные
-  (путь, заголовок, mtime), sha1-хэш чанка для инкрементальности.
+- [x] **A — конфигурация.** `BotConfig.obsidian_vault_path/has_vault_index/
+  ollama_base_url/ollama_embed_model/vault_reindex_interval_minutes`.
+  Коммит `4d54695` (запушено).
+- [x] **B — сканирование и чанкинг vault.** `bot/vault_scanner.py`:
+  `scan_vault()` (обход `.md`, игнор `.obsidian/.trash/.git/node_modules`),
+  `chunk_file()`/`chunk_vault()` — режет по заголовкам ЛЮБОГО уровня (не
+  только `##` — `###`-подраздел тоже начинает новый чанк, узел не
+  вкладывается в родителя), пустые секции пропускаются, `chunk_id`
+  завязан на путь+заголовок (не на позицию — вставка секции до/после не
+  меняет id соседних), `content_hash` = sha1 текста для инкрементальности
+  (Блок C будет сравнивать с уже проиндексированным). 177 тестов (было 167),
+  mypy/ruff чисто. **Коммит ещё не сделан.**
 - [ ] **C — эмбеддинги и vector store.** `OllamaEmbeddingClient` (+ `NullEmbeddingClient`
   fallback, по паттерну `WeatherClient`), `sqlite-vec`, `VaultIndex`
   (upsert/search/инкрементальность по хэшам из Б), скрипт полной переиндексации
