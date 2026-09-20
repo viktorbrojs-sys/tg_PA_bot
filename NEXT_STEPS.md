@@ -103,11 +103,36 @@ python-telegram-bot.
   завязан на путь+заголовок (не на позицию — вставка секции до/после не
   меняет id соседних), `content_hash` = sha1 текста для инкрементальности
   (Блок C будет сравнивать с уже проиндексированным). 177 тестов (было 167),
-  mypy/ruff чисто. **Коммит ещё не сделан.**
-- [ ] **C — эмбеддинги и vector store.** `OllamaEmbeddingClient` (+ `NullEmbeddingClient`
-  fallback, по паттерну `WeatherClient`), `sqlite-vec`, `VaultIndex`
-  (upsert/search/инкрементальность по хэшам из Б), скрипт полной переиндексации
-  + APScheduler job в `scheduler/jobs.py`.
+  mypy/ruff чисто. Коммит `76a6446` (запушено).
+- [x] **C — эмбеддинги и vector store.** Готово полностью:
+  - `integrations/embedding_client.py`: `OllamaEmbeddingClient` (HTTP к
+    `/api/embed`, батчем) + `NullEmbeddingClient` fallback
+  - `vault_index.py`: `VaultIndex` на `sqlite-vec` (`vec0`-таблица +
+    обычная таблица метаданных, связаны по rowid), async-safe как
+    `TaskStore`. **Важно:** размерность эмбеддинга (`embedding_dim`) нужна
+    заранее при создании vec0-таблицы — берётся один раз пробным вызовом
+    `embed()` при старте бота/скрипта (не хардкодится по имени модели)
+  - `services/vault_indexer.py`: `reindex_vault()` — diff по `content_hash`
+    (эмбеддит только новое/изменённое), `delete_missing()` для удалённых
+    заметок, при недоступности Ollama — abort без порчи индекса
+    (`ReindexStats.failed`)
+  - `scheduler/jobs.py`: **рефакторинг** — раньше `setup_scheduler()` целиком
+    завершался, если не задан `TELEGRAM_CHAT_ID` (все job'ы были
+    завязаны на отправку сообщений). Теперь vault-reindex job (ему чат не
+    нужен) регистрируется независимо от chat-задач — иначе Second Brain
+    не работал бы без настроенного `TELEGRAM_CHAT_ID`
+  - `scripts/reindex_vault.py`: ручной разовый запуск (`cd bot && python
+    ../scripts/reindex_vault.py`)
+  - `config.py`: добавлено `vault_index_db_path`
+    (`VAULT_INDEX_DB_PATH`, дефолт `~/.tg_pa_bot/vault_index.db` —
+    **намеренно не внутри vault**, чтобы не путать Obsidian Sync/git
+    бинарником, который меняется при каждой переиндексации)
+  - `main.py`: `build_embedding_client()`, дим-проба в `post_init` (там уже
+    есть event loop), `vault_index` кладётся в `app.bot_data` — пригодится
+    в блоке D
+  - Зависимость `sqlite-vec==0.1.9` в requirements.txt/pyproject.toml —
+    есть wheels под Linux/macOS/Windows x64, никакого torch
+  - 204 теста (было 177), mypy/ruff чисто. **Коммит ещё не сделан.**
 - [ ] **D — семантический поиск.** `SearchService` переключить на
   embed→VaultIndex.search()→`summarize_search()`, fallback на grep без индекса,
   `MeetingBriefService._build_brief` — на новый поиск.

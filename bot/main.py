@@ -22,6 +22,11 @@ from handlers import (
     make_cmd_setcategory,
     make_handle_message,
 )
+from integrations.embedding_client import (
+    EmbeddingClient,
+    NullEmbeddingClient,
+    OllamaEmbeddingClient,
+)
 from integrations.google_calendar import CalendarClient, GoogleCalendarClient, NullCalendarClient
 from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
 from integrations.weather_client import NullWeatherClient, OpenMeteoClient, WeatherClient
@@ -44,6 +49,7 @@ from telegram.ext import (
     TypeHandler,
     filters,
 )
+from vault_index import VaultIndex
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +126,14 @@ def build_weather_client(config: BotConfig) -> WeatherClient:
     return NullWeatherClient()
 
 
+def build_embedding_client(config: BotConfig) -> EmbeddingClient:
+    if config.has_vault_index:
+        return OllamaEmbeddingClient(
+            base_url=config.ollama_base_url, model=config.ollama_embed_model
+        )
+    return NullEmbeddingClient()
+
+
 def register_handlers(app: Application, config: BotConfig) -> None:
     store = TaskStore(config.obsidian_file)
     llm = build_llm_client(config)
@@ -149,6 +163,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     app.bot_data["digest_service"] = digest_service
     app.bot_data["reflection_state"] = reflection_state
     app.bot_data["meeting_brief_service"] = meeting_brief_service
+    app.bot_data["embeddings"] = build_embedding_client(config)
 
     if config.has_allowlist:
         app.add_handler(TypeHandler(Update, make_access_guard(config.allowed_user_ids)), group=-1)
@@ -192,8 +207,38 @@ def build_app(config: BotConfig) -> Application:
         digest_service: DigestService = app.bot_data["digest_service"]
         reflection_state: ReflectionState = app.bot_data["reflection_state"]
         meeting_brief_service: MeetingBriefService | None = app.bot_data["meeting_brief_service"]
+
+        # VaultIndex needs the embedding dimension up front (sqlite-vec's
+        # vec0 tables have a fixed vector width), which we only learn by
+        # actually calling Ollama — so this probe happens here, once, at
+        # startup, rather than baking a per-model dimension table into the
+        # config layer. If Ollama isn't reachable yet, vault indexing is
+        # simply skipped for this run (same "degrade gracefully" pattern as
+        # a misconfigured calendar/weather integration) — it'll pick back up
+        # on the next bot restart once Ollama is up.
+        embeddings: EmbeddingClient = app.bot_data["embeddings"]
+        vault_index: VaultIndex | None = None
+        if config.has_vault_index:
+            probe = await embeddings.embed(["_dimension_probe_"])
+            if not probe:
+                logger.error(
+                    "OBSIDIAN_VAULT_PATH задан, но Ollama (%s, модель %s) недоступна — "
+                    "индексация vault отключена для этого запуска бота.",
+                    config.ollama_base_url,
+                    config.ollama_embed_model,
+                )
+            else:
+                vault_index = VaultIndex(config.vault_index_db_path, embedding_dim=len(probe[0]))
+                app.bot_data["vault_index"] = vault_index
+
         app.bot_data["scheduler"] = setup_scheduler(
-            app, config, digest_service, reflection_state, meeting_brief_service
+            app,
+            config,
+            digest_service,
+            reflection_state,
+            meeting_brief_service,
+            vault_index=vault_index,
+            embeddings=embeddings if vault_index is not None else None,
         )
 
     return Application.builder().token(config.token).post_init(post_init).build()

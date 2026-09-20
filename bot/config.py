@@ -58,6 +58,7 @@ class BotConfig:
     ollama_base_url: str
     ollama_embed_model: str
     vault_reindex_interval_minutes: int
+    vault_index_db_path: Path
 
     @property
     def has_allowlist(self) -> bool:
@@ -193,6 +194,19 @@ def _resolve_obsidian_vault_path() -> Path | None:
     return Path(raw).expanduser().resolve()
 
 
+def _resolve_vault_index_db_path() -> Path:
+    """Where the sqlite-vec index file lives. Deliberately NOT inside the
+    Obsidian vault itself (default: a dotfolder in the home directory) —
+    it's a derived/rebuildable artifact, not a note, and keeping it out of
+    the vault avoids confusing Obsidian Sync/git-based vault backups with a
+    binary file that changes on every reindex.
+    """
+    raw = os.environ.get("VAULT_INDEX_DB_PATH", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path.home() / ".tg_pa_bot" / "vault_index.db"
+
+
 def _validate_obsidian_vault_path(path: Path) -> str | None:
     """Return an error message if the vault path is unusable, else None."""
     if not path.exists():
@@ -297,6 +311,7 @@ def load_config() -> BotConfig | None:
         vault_reindex_interval_minutes=_resolve_positive_int(
             "VAULT_REINDEX_INTERVAL_MINUTES", DEFAULT_VAULT_REINDEX_INTERVAL_MINUTES
         ),
+        vault_index_db_path=_resolve_vault_index_db_path(),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"

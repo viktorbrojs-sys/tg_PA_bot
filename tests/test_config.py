@@ -74,6 +74,7 @@ def test_load_config_success(monkeypatch, tmp_path):
     assert cfg.ollama_base_url == config.DEFAULT_OLLAMA_BASE_URL
     assert cfg.ollama_embed_model == config.DEFAULT_OLLAMA_EMBED_MODEL
     assert cfg.vault_reindex_interval_minutes == config.DEFAULT_VAULT_REINDEX_INTERVAL_MINUTES
+    assert cfg.vault_index_db_path == Path.home() / ".tg_pa_bot" / "vault_index.db"
 
 
 def test_resolve_task_sections_parses_and_trims(monkeypatch):
@@ -235,7 +236,6 @@ def test_load_config_with_vault_path(monkeypatch, tmp_path):
     assert cfg.obsidian_vault_path == vault.resolve()
     assert cfg.ollama_embed_model == "mxbai-embed-large"
 
-
 def test_load_config_fails_with_missing_vault_path(monkeypatch, tmp_path):
     monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
     monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "tasks.md"))
@@ -243,3 +243,13 @@ def test_load_config_fails_with_missing_vault_path(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
 
     assert config.load_config() is None
+
+
+def test_resolve_vault_index_db_path_default(monkeypatch):
+    monkeypatch.delenv("VAULT_INDEX_DB_PATH", raising=False)
+    assert config._resolve_vault_index_db_path() == Path.home() / ".tg_pa_bot" / "vault_index.db"
+
+
+def test_resolve_vault_index_db_path_custom(monkeypatch, tmp_path):
+    monkeypatch.setenv("VAULT_INDEX_DB_PATH", str(tmp_path / "custom.db"))
+    assert config._resolve_vault_index_db_path() == (tmp_path / "custom.db").resolve()
