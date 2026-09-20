@@ -24,6 +24,9 @@ DEFAULT_WEEKLY_REVIEW_DAY = "sun"
 DEFAULT_WEEKLY_REVIEW_TIME = "20:00"
 DEFAULT_GOOGLE_CALENDAR_ID = "primary"
 DEFAULT_MEETING_BRIEF_LEAD_MINUTES = 30
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_EMBED_MODEL = "nomic-embed-text"
+DEFAULT_VAULT_REINDEX_INTERVAL_MINUTES = 60
 
 # Values accepted by APScheduler's CronTrigger(day_of_week=...).
 _VALID_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
@@ -51,6 +54,10 @@ class BotConfig:
     meeting_brief_lead_minutes: int
     weather_latitude: float | None
     weather_longitude: float | None
+    obsidian_vault_path: Path | None
+    ollama_base_url: str
+    ollama_embed_model: str
+    vault_reindex_interval_minutes: int
 
     @property
     def has_allowlist(self) -> bool:
@@ -71,6 +78,10 @@ class BotConfig:
     @property
     def has_weather(self) -> bool:
         return self.weather_latitude is not None and self.weather_longitude is not None
+
+    @property
+    def has_vault_index(self) -> bool:
+        return self.obsidian_vault_path is not None
 
 
 def _resolve_obsidian_file() -> Path:
@@ -170,6 +181,27 @@ def _resolve_coordinate(env_var: str, min_value: float, max_value: float) -> flo
     return value
 
 
+def _resolve_obsidian_vault_path() -> Path | None:
+    """Whole-vault semantic search (Second Brain) is opt-in: unset ->
+    feature disabled, the bot behaves exactly as before (grep-only search).
+    Unlike OBSIDIAN_FILE, this directory must already exist — we don't want
+    to silently create an empty "vault" the person never asked for.
+    """
+    raw = os.environ.get("OBSIDIAN_VAULT_PATH", "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def _validate_obsidian_vault_path(path: Path) -> str | None:
+    """Return an error message if the vault path is unusable, else None."""
+    if not path.exists():
+        return f"OBSIDIAN_VAULT_PATH does not exist: {path}"
+    if not path.is_dir():
+        return f"OBSIDIAN_VAULT_PATH is not a directory: {path}"
+    return None
+
+
 def _validate_obsidian_file(path: Path) -> str | None:
     """Return an error message if the tasks file cannot possibly be written, else None."""
     if path.exists() and path.is_dir():
@@ -216,6 +248,13 @@ def load_config() -> BotConfig | None:
         logger.warning("Неизвестный LOG_LEVEL=%r, использую INFO", log_level)
         log_level = "INFO"
 
+    obsidian_vault_path = _resolve_obsidian_vault_path()
+    if obsidian_vault_path is not None:
+        vault_error = _validate_obsidian_vault_path(obsidian_vault_path)
+        if vault_error:
+            logger.error("Некорректный OBSIDIAN_VAULT_PATH: %s", vault_error)
+            return None
+
     deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip() or None
     llm_model = os.environ.get("LLM_MODEL", "").strip() or DEFAULT_LLM_MODEL
     allowed_user_ids = _resolve_allowed_user_ids()
@@ -250,13 +289,21 @@ def load_config() -> BotConfig | None:
         ),
         weather_latitude=_resolve_coordinate("WEATHER_LATITUDE", -90.0, 90.0),
         weather_longitude=_resolve_coordinate("WEATHER_LONGITUDE", -180.0, 180.0),
+        obsidian_vault_path=obsidian_vault_path,
+        ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "").strip().rstrip("/")
+        or DEFAULT_OLLAMA_BASE_URL,
+        ollama_embed_model=os.environ.get("OLLAMA_EMBED_MODEL", "").strip()
+        or DEFAULT_OLLAMA_EMBED_MODEL,
+        vault_reindex_interval_minutes=_resolve_positive_int(
+            "VAULT_REINDEX_INTERVAL_MINUTES", DEFAULT_VAULT_REINDEX_INTERVAL_MINUTES
+        ),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
     logger.info(
         "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s "
         "chat_id=%s digest=%s reflection=%s weekly_review=%s %s tz=%s "
-        "calendar=%s weather=%s",
+        "calendar=%s weather=%s vault_index=%s",
         env_source,
         config.obsidian_file,
         sorted(config.allowed_user_ids) or "disabled",
@@ -270,5 +317,8 @@ def load_config() -> BotConfig | None:
         config.timezone,
         "google" if config.has_calendar else "disabled",
         "open-meteo" if config.has_weather else "disabled",
+        f"{config.obsidian_vault_path} (ollama:{config.ollama_embed_model})"
+        if config.has_vault_index
+        else "disabled",
     )
     return config

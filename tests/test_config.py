@@ -49,6 +49,7 @@ def test_load_config_success(monkeypatch, tmp_path):
     monkeypatch.delenv("GOOGLE_CALENDAR_REFRESH_TOKEN", raising=False)
     monkeypatch.delenv("WEATHER_LATITUDE", raising=False)
     monkeypatch.delenv("WEATHER_LONGITUDE", raising=False)
+    monkeypatch.delenv("OBSIDIAN_VAULT_PATH", raising=False)
     monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
 
     cfg = config.load_config()
@@ -68,6 +69,11 @@ def test_load_config_success(monkeypatch, tmp_path):
     assert cfg.google_calendar_id == config.DEFAULT_GOOGLE_CALENDAR_ID
     assert cfg.meeting_brief_lead_minutes == config.DEFAULT_MEETING_BRIEF_LEAD_MINUTES
     assert cfg.has_weather is False
+    assert cfg.has_vault_index is False
+    assert cfg.obsidian_vault_path is None
+    assert cfg.ollama_base_url == config.DEFAULT_OLLAMA_BASE_URL
+    assert cfg.ollama_embed_model == config.DEFAULT_OLLAMA_EMBED_MODEL
+    assert cfg.vault_reindex_interval_minutes == config.DEFAULT_VAULT_REINDEX_INTERVAL_MINUTES
 
 
 def test_resolve_task_sections_parses_and_trims(monkeypatch):
@@ -186,3 +192,54 @@ def test_has_weather_requires_both_coordinates(monkeypatch, tmp_path):
     cfg = config.load_config()
     assert cfg is not None
     assert cfg.has_weather is True
+
+
+def test_resolve_obsidian_vault_path_unset_is_none(monkeypatch):
+    monkeypatch.delenv("OBSIDIAN_VAULT_PATH", raising=False)
+    assert config._resolve_obsidian_vault_path() is None
+
+
+def test_resolve_obsidian_vault_path_expands_user(monkeypatch, tmp_path):
+    monkeypatch.setenv("OBSIDIAN_VAULT_PATH", "~/some/vault")
+    result = config._resolve_obsidian_vault_path()
+    assert result == (Path.home() / "some" / "vault").resolve()
+
+
+def test_validate_obsidian_vault_path_missing_dir(tmp_path):
+    missing = tmp_path / "does-not-exist"
+    assert config._validate_obsidian_vault_path(missing) is not None
+
+
+def test_validate_obsidian_vault_path_rejects_file(tmp_path):
+    a_file = tmp_path / "not-a-dir.md"
+    a_file.write_text("hi", encoding="utf-8")
+    assert config._validate_obsidian_vault_path(a_file) is not None
+
+
+def test_validate_obsidian_vault_path_accepts_existing_dir(tmp_path):
+    assert config._validate_obsidian_vault_path(tmp_path) is None
+
+
+def test_load_config_with_vault_path(monkeypatch, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
+    monkeypatch.setenv("OBSIDIAN_FILE", str(vault / "tasks.md"))
+    monkeypatch.setenv("OBSIDIAN_VAULT_PATH", str(vault))
+    monkeypatch.setenv("OLLAMA_EMBED_MODEL", "mxbai-embed-large")
+    monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
+
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.has_vault_index is True
+    assert cfg.obsidian_vault_path == vault.resolve()
+    assert cfg.ollama_embed_model == "mxbai-embed-large"
+
+
+def test_load_config_fails_with_missing_vault_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
+    monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "tasks.md"))
+    monkeypatch.setenv("OBSIDIAN_VAULT_PATH", str(tmp_path / "no-such-vault"))
+    monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
+
+    assert config.load_config() is None
