@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from services.contact_service import ContactService
 from services.digest_service import DigestService
 from services.pending_command_state import PendingCommandState
 from services.reflection_service import ReflectionService, ReflectionState
@@ -39,6 +40,7 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("list", "Все открытые задачи (или /list N — последние N)"),
     ("plan", "Разбить сообщение на несколько задач на день"),
     ("search", "Найти информацию в заметках"),
+    ("contact", "Найти человека: упоминания в заметках + прошлые встречи"),
     ("done", "Отметить задачу как выполненную (номер из /list)"),
     ("deadline", "Установить или убрать дедлайн у задачи"),
     ("priority", "Установить или убрать приоритет у задачи"),
@@ -521,6 +523,43 @@ def make_cmd_search(service: SearchService, pending_state: PendingCommandState):
     return cmd_search
 
 
+# ── /contact — required free-text argument (person's name) ───────────────────
+
+
+async def _run_contact(service: ContactService, name: str) -> str:
+    return await service.find(name)
+
+
+def make_cmd_contact(service: ContactService, pending_state: PendingCommandState):
+    async def cmd_contact(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        chat_id = _chat_id(update)
+        if chat_id is not None:
+            pending_state.clear(chat_id)
+
+        name = " ".join(ctx.args or []).strip()
+        if not name:
+            if chat_id is not None:
+                pending_state.start(chat_id, "contact")
+            await update.message.reply_text(
+                "👤 Чьё имя искать? Напишите следующим сообщением."
+            )
+            return
+
+        try:
+            reply = await _run_contact(service, name)
+        except OSError as exc:
+            logger.error("Failed to search vault for contact: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(reply)
+
+    return cmd_contact
+
+
 # ── /review — on-demand weekly review (also sent proactively by the scheduler) ─
 
 
@@ -550,6 +589,7 @@ def make_handle_message(
     reflection_state: ReflectionState,
     reflection_service: ReflectionService,
     pending_state: PendingCommandState,
+    contact_service: ContactService,
 ):
     async def handle_message(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message is None or update.message.text is None:
@@ -591,6 +631,8 @@ def make_handle_message(
                     reply = await _run_priority(task_service, text)
                 elif command == "setcategory":
                     reply = await _run_setcategory(task_service, text)
+                elif command == "contact":
+                    reply = await _run_contact(contact_service, text)
                 else:  # pragma: no cover — defensive, all known commands handled above
                     reply = None
             except OSError as exc:

@@ -31,7 +31,11 @@ class CalendarEvent:
     summary: str
     start: datetime
     end: datetime
-    attendees: tuple[str, ...] = ()
+    attendees: tuple[str, ...] = ()  # emails
+    attendee_names: tuple[str, ...] = ()  # display names, same order as attendees
+    # (falls back to the email itself when Google has no display name for
+    # that attendee) — kept separate from `attendees` rather than replacing
+    # it, so existing "join emails" callers don't need to change.
     location: str | None = None
 
 
@@ -129,12 +133,16 @@ def _parse_event(item: dict[str, Any]) -> CalendarEvent | None:
         return None
 
     attendees = tuple(a["email"] for a in item.get("attendees", []) if a.get("email"))
+    attendee_names = tuple(
+        a.get("displayName") or a["email"] for a in item.get("attendees", []) if a.get("email")
+    )
     return CalendarEvent(
         id=str(item.get("id", "")),
         summary=str(item.get("summary") or "(без названия)"),
         start=start,
         end=end,
         attendees=attendees,
+        attendee_names=attendee_names,
         location=item.get("location"),
     )
 

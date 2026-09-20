@@ -12,6 +12,7 @@ from handlers import (
     cmd_help,
     cmd_start,
     cmd_unknown,
+    make_cmd_contact,
     make_cmd_deadline,
     make_cmd_done,
     make_cmd_list,
@@ -31,6 +32,7 @@ from integrations.google_calendar import CalendarClient, GoogleCalendarClient, N
 from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
 from integrations.weather_client import NullWeatherClient, OpenMeteoClient, WeatherClient
 from scheduler.jobs import setup_scheduler
+from services.contact_service import ContactService
 from services.digest_service import DigestService
 from services.meeting_brief_service import MeetingBriefService, MeetingBriefState
 from services.pending_command_state import PendingCommandState
@@ -142,6 +144,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
 
     task_service = TaskService(store, llm, sections=config.task_sections)
     search_service = SearchService(store, llm)
+    contact_service = ContactService(calendar, vault_path=config.obsidian_vault_path)
     digest_service = DigestService(
         task_service, calendar=calendar, weather=weather, timezone=config.timezone
     )
@@ -180,12 +183,18 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     )
     app.add_handler(CommandHandler("plan", make_cmd_plan(task_service, pending_state)))
     app.add_handler(CommandHandler("search", make_cmd_search(search_service, pending_state)))
+    app.add_handler(CommandHandler("contact", make_cmd_contact(contact_service, pending_state)))
     app.add_handler(CommandHandler("review", make_cmd_review(digest_service)))
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             make_handle_message(
-                task_service, search_service, reflection_state, reflection_service, pending_state
+                task_service,
+                search_service,
+                reflection_state,
+                reflection_service,
+                pending_state,
+                contact_service,
             ),
         )
     )

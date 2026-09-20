@@ -53,6 +53,22 @@ def test_parse_event_extracts_fields():
     assert event.summary == "Созвон с Ивановым"
     assert event.location == "Zoom"
     assert event.attendees == ("ivanov@example.com",)
+    # No displayName for ivanov@example.com -> falls back to the email itself.
+    assert event.attendee_names == ("ivanov@example.com",)
+
+
+def test_parse_event_uses_display_name_when_present():
+    item = {
+        "id": "abc123",
+        "summary": "Созвон",
+        "start": {"dateTime": "2026-09-15T14:00:00+03:00"},
+        "end": {"dateTime": "2026-09-15T15:00:00+03:00"},
+        "attendees": [{"email": "ivanov@example.com", "displayName": "Иван Иванов"}],
+    }
+    event = _parse_event(item)
+    assert event is not None
+    assert event.attendees == ("ivanov@example.com",)
+    assert event.attendee_names == ("Иван Иванов",)
 
 
 def test_parse_event_defaults_missing_summary():
