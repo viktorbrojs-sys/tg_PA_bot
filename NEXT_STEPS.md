@@ -152,9 +152,27 @@ python-telegram-bot.
     так вызывает `SearchService.search()`, публичный интерфейс которого
     не поменялся, так что семантика подключилась к нему бесплатно
   - 207 тестов (было 204), mypy/ruff чисто. **Коммит ещё не сделан.**
-- [ ] **E — связи между контактами.** Объединить упоминания в vault с
-  `CalendarEvent.attendees`, команда `/contact Имя` или расширение `/search`.
-- [ ] **F — UX.** `/reindex`, обновить `/help` про `/search`.
+- [x] **E — связи между контактами.** Готово:
+  - `CalendarEvent.attendee_names` — новое поле (display name с фолбэком на
+    email), не трогая существующее `attendees` (emails) — обратная
+    совместимость сохранена
+  - `services/contact_service.py`: `ContactService.find(name)` —
+    **сознательно НЕ через embeddings**: подстроковый поиск имени по
+    ВСЕМУ vault (`vault_scanner.chunk_vault`, читает файлы заново на
+    каждый вызов — без кэша, это ок для редкой ручной команды) надёжнее
+    семантического для точных имён и работает даже без Ollama; плюс
+    прошлые встречи из Google Calendar за последние 90 дней
+    (`DEFAULT_LOOKBACK`), сортировка по дате (новые первыми), не больше
+    5 совпадений с каждой стороны, длинные сниппеты обрезаются
+  - `now` — injectable callable в конструкторе (`now: Callable[[],
+    datetime] = datetime.now`), как у `DigestService`/`TaskStore`, а не
+    параметр метода — под тесты с фиксированным временем
+  - `handlers.py`/`main.py`: команда `/contact Имя` — полный цикл
+    (inline + «спросить следующим сообщением», как у `/search`),
+    в `BOT_COMMANDS` и в диспетчере pending-команд
+  - 222 теста (было 207), mypy/ruff чисто. Коммиты `dcdad5a` (WIP) +
+    следующий (тесты хендлера, HELP_TEXT/WELCOME_TEXT) — оба запушены.
+- [ ] **F — UX.** `/reindex`, обновить `/help` про `/search` и `/contact`.
 - [ ] **G — тесты.** По ходу каждого блока (уже частично покрыто в A).
 - [ ] **H — документация.** README/USER_GUIDE/CHANGELOG — **в конце**, разом.
 

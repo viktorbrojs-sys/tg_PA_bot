@@ -6,6 +6,7 @@ from handlers import (
     _has_valid_deadline_args,
     _has_valid_priority_args,
     _has_valid_setcategory_args,
+    _run_contact,
     _run_deadline,
     _run_done,
     _run_plan,
@@ -13,7 +14,9 @@ from handlers import (
     _run_search,
     _run_setcategory,
 )
+from integrations.google_calendar import NullCalendarClient
 from integrations.llm_client import NullLLMClient
+from services.contact_service import ContactService
 from services.search_service import SearchService
 from services.task_service import TaskService
 from storage import TaskStore
@@ -29,6 +32,13 @@ def store(tmp_path):
 @pytest.fixture
 def task_service(store):
     return TaskService(store, NullLLMClient(), sections=("Работа", "Личное"))
+
+
+@pytest.fixture
+def contact_service(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    return ContactService(NullCalendarClient(), vault_path=vault, now=lambda: FIXED_NOW)
 
 
 @pytest.mark.asyncio
@@ -211,3 +221,20 @@ def test_has_valid_priority_args():
     assert _has_valid_priority_args("1 off") is True
     assert _has_valid_priority_args("1 суперважно") is False
     assert _has_valid_priority_args("высокий") is False  # missing index
+
+
+@pytest.mark.asyncio
+async def test_run_contact_reports_nothing_found(contact_service):
+    reply = await _run_contact(contact_service, "Иванов")
+    assert "Ничего не нашёл" in reply
+
+
+@pytest.mark.asyncio
+async def test_run_contact_finds_note_mention(contact_service, tmp_path):
+    vault = tmp_path / "vault"
+    (vault / "note.md").write_text("## Встреча\nСозвонились с Ивановым.\n", encoding="utf-8")
+
+    reply = await _run_contact(contact_service, "Иванов")
+
+    assert "Упоминания в заметках" in reply
+    assert "note.md" in reply
