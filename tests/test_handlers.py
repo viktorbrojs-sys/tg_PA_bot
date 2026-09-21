@@ -3,6 +3,9 @@ from datetime import datetime
 import pytest
 from handlers import (
     BOT_COMMANDS,
+    REINDEX_FAILED_TEXT,
+    REINDEX_INDEX_NOT_READY_TEXT,
+    REINDEX_NOT_CONFIGURED_TEXT,
     _has_valid_deadline_args,
     _has_valid_priority_args,
     _has_valid_setcategory_args,
@@ -11,6 +14,7 @@ from handlers import (
     _run_done,
     _run_plan,
     _run_priority,
+    _run_reindex,
     _run_search,
     _run_setcategory,
 )
@@ -20,6 +24,7 @@ from services.contact_service import ContactService
 from services.search_service import SearchService
 from services.task_service import TaskService
 from storage import TaskStore
+from vault_index import VaultIndex
 
 FIXED_NOW = datetime(2026, 9, 9, 12, 0)
 
@@ -238,3 +243,50 @@ async def test_run_contact_finds_note_mention(contact_service, tmp_path):
 
     assert "Упоминания в заметках" in reply
     assert "note.md" in reply
+
+
+class FakeEmbeddingClient:
+    def __init__(self, fail: bool = False):
+        self._fail = fail
+
+    async def embed(self, texts):
+        if self._fail:
+            return None
+        return [[1.0, 0.0, 0.0] for _ in texts]
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_not_configured():
+    reply = await _run_reindex(vault_path=None, vault_index=None, embeddings=None)
+    assert reply == REINDEX_NOT_CONFIGURED_TEXT
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_index_not_ready(tmp_path):
+    reply = await _run_reindex(vault_path=tmp_path, vault_index=None, embeddings=None)
+    assert reply == REINDEX_INDEX_NOT_READY_TEXT
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_success(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note.md").write_text("## X\nТекст заметки.\n", encoding="utf-8")
+    index = VaultIndex(tmp_path / "index.db", embedding_dim=3)
+
+    reply = await _run_reindex(vault, index, FakeEmbeddingClient())
+
+    assert "Готово" in reply
+    assert "добавлено 1" in reply
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_reports_failure_when_embeddings_unavailable(tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note.md").write_text("## X\nТекст заметки.\n", encoding="utf-8")
+    index = VaultIndex(tmp_path / "index.db", embedding_dim=3)
+
+    reply = await _run_reindex(vault, index, FakeEmbeddingClient(fail=True))
+
+    assert reply == REINDEX_FAILED_TEXT

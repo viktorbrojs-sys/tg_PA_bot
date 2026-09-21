@@ -16,16 +16,20 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 
+from integrations.embedding_client import EmbeddingClient
 from services.contact_service import ContactService
 from services.digest_service import DigestService
 from services.pending_command_state import PendingCommandState
 from services.reflection_service import ReflectionService, ReflectionState
 from services.search_service import SearchService
 from services.task_service import TaskService
+from services.vault_indexer import reindex_vault
 from storage import PRIORITY_LABELS, PRIORITY_LEVELS, parse_priority_input
 from telegram import Update
 from telegram.ext import ContextTypes
+from vault_index import VaultIndex
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("plan", "Разбить сообщение на несколько задач на день"),
     ("search", "Найти информацию в заметках"),
     ("contact", "Найти человека: упоминания в заметках + прошлые встречи"),
+    ("reindex", "Обновить индекс vault для семантического поиска сейчас"),
     ("done", "Отметить задачу как выполненную (номер из /list)"),
     ("deadline", "Установить или убрать дедлайн у задачи"),
     ("priority", "Установить или убрать приоритет у задачи"),
@@ -62,6 +67,7 @@ WELCOME_TEXT = (
     "/plan <текст> — разбить сообщение на несколько задач на день\n"
     "/search <запрос> — найти информацию в заметках\n"
     "/contact <имя> — найти человека: упоминания в заметках + прошлые встречи\n"
+    "/reindex — обновить индекс vault для семантического поиска сейчас\n"
     "/done N — отметить задачу N (из /list) как выполненную\n"
     "/deadline N ГГГГ-ММ-ДД — поставить дедлайн задаче N (необязательно для всех)\n"
     "/priority N уровень — поставить приоритет задаче N\n"
@@ -78,10 +84,14 @@ HELP_TEXT = (
     "• /list — полный список открытых задач\n"
     "• /list N — последние N открытых задач\n"
     "• /plan <текст> — разбить сообщение на несколько задач одним вызовом\n"
-    "• /search <запрос> — найти информацию в заметках\n"
+    "• /search <запрос> — найти информацию в заметках (по всему vault и "
+    "прошлым заметкам, если настроен OBSIDIAN_VAULT_PATH; иначе — по файлу "
+    "задач)\n"
     "• /contact <имя> — найти человека: упоминания в заметках (по всему vault, "
     "если настроен OBSIDIAN_VAULT_PATH) + прошлые встречи из Google Calendar "
     "за последние 90 дней (если настроен)\n"
+    "• /reindex — обновить индекс vault прямо сейчас, не дожидаясь фонового "
+    "расписания (актуально только при настроенном OBSIDIAN_VAULT_PATH)\n"
     "• /done N — отметить N-ю задачу из /list как выполненную\n"
     "• /deadline N ГГГГ-ММ-ДД — поставить дедлайн задаче N; /deadline N off — убрать. "
     "Дедлайн ставится по желанию, не у каждой задачи он есть\n"
@@ -562,6 +572,67 @@ def make_cmd_contact(service: ContactService, pending_state: PendingCommandState
         await update.message.reply_text(reply)
 
     return cmd_contact
+
+
+# ── /reindex — no arguments, syncs the vault search index on demand ──────────
+
+REINDEX_NOT_CONFIGURED_TEXT = (
+    "🔍 OBSIDIAN_VAULT_PATH не настроен — индексировать нечего. "
+    "Семантический поиск (Second Brain) выключен."
+)
+REINDEX_INDEX_NOT_READY_TEXT = (
+    "⚠️ Индекс vault ещё не готов — либо Ollama была недоступна при старте "
+    "бота (проверьте OLLAMA_BASE_URL/OLLAMA_EMBED_MODEL), либо бот только "
+    "что перезапустился. Переиндексация заработает после следующего "
+    "успешного старта, когда Ollama будет доступна."
+)
+REINDEX_FAILED_TEXT = (
+    "⚠️ Ollama недоступна прямо сейчас — переиндексация прервана, индекс не тронут."
+)
+
+
+async def _run_reindex(
+    vault_path: Path | None,
+    vault_index: VaultIndex | None,
+    embeddings: EmbeddingClient | None,
+) -> str:
+    if vault_path is None:
+        return REINDEX_NOT_CONFIGURED_TEXT
+    if vault_index is None or embeddings is None:
+        return REINDEX_INDEX_NOT_READY_TEXT
+
+    stats = await reindex_vault(vault_path, vault_index, embeddings)
+    if stats.failed:
+        return REINDEX_FAILED_TEXT
+
+    return (
+        f"✅ Готово: добавлено {stats.added}, обновлено {stats.updated}, "
+        f"удалено {stats.deleted}, без изменений {stats.unchanged}."
+    )
+
+
+def make_cmd_reindex(vault_path: Path | None):
+    async def cmd_reindex(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        # vault_index/embeddings only exist once post_init's Ollama dim-probe
+        # has succeeded (main.py), so they're read from bot_data at call
+        # time rather than captured at registration time, when they'd still
+        # be None even in a correctly-configured setup.
+        vault_index = ctx.application.bot_data.get("vault_index")
+        embeddings = ctx.application.bot_data.get("embeddings")
+
+        try:
+            reply = await _run_reindex(vault_path, vault_index, embeddings)
+        except OSError as exc:
+            logger.error("Vault reindex failed: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(reply)
+
+    return cmd_reindex
 
 
 # ── /review — on-demand weekly review (also sent proactively by the scheduler) ─

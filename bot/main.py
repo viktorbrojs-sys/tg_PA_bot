@@ -18,6 +18,7 @@ from handlers import (
     make_cmd_list,
     make_cmd_plan,
     make_cmd_priority,
+    make_cmd_reindex,
     make_cmd_review,
     make_cmd_search,
     make_cmd_setcategory,
@@ -184,6 +185,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     app.add_handler(CommandHandler("plan", make_cmd_plan(task_service, pending_state)))
     app.add_handler(CommandHandler("search", make_cmd_search(search_service, pending_state)))
     app.add_handler(CommandHandler("contact", make_cmd_contact(contact_service, pending_state)))
+    app.add_handler(CommandHandler("reindex", make_cmd_reindex(config.obsidian_vault_path)))
     app.add_handler(CommandHandler("review", make_cmd_review(digest_service)))
     app.add_handler(
         MessageHandler(
