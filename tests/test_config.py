@@ -47,6 +47,9 @@ def test_load_config_success(monkeypatch, tmp_path):
     monkeypatch.delenv("GOOGLE_CALENDAR_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_CALENDAR_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("GOOGLE_CALENDAR_REFRESH_TOKEN", raising=False)
+    monkeypatch.delenv("GMAIL_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GMAIL_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("GMAIL_REFRESH_TOKEN", raising=False)
     monkeypatch.delenv("WEATHER_LATITUDE", raising=False)
     monkeypatch.delenv("WEATHER_LONGITUDE", raising=False)
     monkeypatch.delenv("OBSIDIAN_VAULT_PATH", raising=False)
@@ -54,6 +57,7 @@ def test_load_config_success(monkeypatch, tmp_path):
 
     cfg = config.load_config()
     assert cfg is not None
+    assert cfg.has_gmail is False
     assert cfg.token == "123456:ABCDEF"
     assert cfg.obsidian_file == (tmp_path / "vault" / "tasks.md").resolve()
     assert cfg.has_allowlist is False
@@ -156,6 +160,24 @@ def test_has_calendar_requires_all_three_credentials(monkeypatch, tmp_path):
     cfg = config.load_config()
     assert cfg is not None
     assert cfg.has_calendar is True
+
+
+def test_has_gmail_requires_all_three_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
+    monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "tasks.md"))
+    monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
+
+    monkeypatch.setenv("GMAIL_CLIENT_ID", "id")
+    monkeypatch.setenv("GMAIL_CLIENT_SECRET", "secret")
+    monkeypatch.delenv("GMAIL_REFRESH_TOKEN", raising=False)
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.has_gmail is False
+
+    monkeypatch.setenv("GMAIL_REFRESH_TOKEN", "refresh")
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.has_gmail is True
 
 
 def test_resolve_coordinate_accepts_valid_value(monkeypatch):

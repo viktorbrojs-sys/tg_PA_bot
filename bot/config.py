@@ -59,6 +59,9 @@ class BotConfig:
     ollama_embed_model: str
     vault_reindex_interval_minutes: int
     vault_index_db_path: Path
+    gmail_client_id: str | None
+    gmail_client_secret: str | None
+    gmail_refresh_token: str | None
 
     @property
     def has_allowlist(self) -> bool:
@@ -74,6 +77,12 @@ class BotConfig:
             self.google_calendar_client_id
             and self.google_calendar_client_secret
             and self.google_calendar_refresh_token
+        )
+
+    @property
+    def has_gmail(self) -> bool:
+        return bool(
+            self.gmail_client_id and self.gmail_client_secret and self.gmail_refresh_token
         )
 
     @property
@@ -312,13 +321,16 @@ def load_config() -> BotConfig | None:
             "VAULT_REINDEX_INTERVAL_MINUTES", DEFAULT_VAULT_REINDEX_INTERVAL_MINUTES
         ),
         vault_index_db_path=_resolve_vault_index_db_path(),
+        gmail_client_id=os.environ.get("GMAIL_CLIENT_ID", "").strip() or None,
+        gmail_client_secret=os.environ.get("GMAIL_CLIENT_SECRET", "").strip() or None,
+        gmail_refresh_token=os.environ.get("GMAIL_REFRESH_TOKEN", "").strip() or None,
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
     logger.info(
         "Config loaded from %s: file=%s allowlist=%s llm=%s sections=%s "
         "chat_id=%s digest=%s reflection=%s weekly_review=%s %s tz=%s "
-        "calendar=%s weather=%s vault_index=%s",
+        "calendar=%s gmail=%s weather=%s vault_index=%s",
         env_source,
         config.obsidian_file,
         sorted(config.allowed_user_ids) or "disabled",
@@ -331,6 +343,7 @@ def load_config() -> BotConfig | None:
         config.weekly_review_time,
         config.timezone,
         "google" if config.has_calendar else "disabled",
+        "google" if config.has_gmail else "disabled",
         "open-meteo" if config.has_weather else "disabled",
         f"{config.obsidian_vault_path} (ollama:{config.ollama_embed_model})"
         if config.has_vault_index
