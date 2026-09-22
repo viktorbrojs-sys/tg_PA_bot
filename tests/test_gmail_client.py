@@ -56,6 +56,7 @@ async def test_null_gmail_client_returns_nothing():
     assert await client.list_unread() == []
     assert await client.list_ids_since(SINCE) == []
     assert await client.get_messages(["a"]) == []
+    assert await client.count_unread() is None
 
 
 # ── Parsing ─────────────────────────────────────────────────────────────────
@@ -169,7 +170,9 @@ def test_html_to_text_drops_script_and_collapses_whitespace():
 # ── Google client ───────────────────────────────────────────────────────────
 
 
-def _install_fake_api(monkeypatch, *, list_pages=None, messages=None, fail_ids=()):
+def _install_fake_api(
+    monkeypatch, *, list_pages=None, messages=None, fail_ids=(), unread_count=None
+):
     """Patch httpx so token/list/get calls are answered locally.
 
     Returns a dict recording calls, so tests can assert on query params.
@@ -187,6 +190,8 @@ def _install_fake_api(monkeypatch, *, list_pages=None, messages=None, fail_ids=(
 
     async def fake_get(self, url, params=None, headers=None):  # noqa: ARG001
         request = httpx.Request("GET", url)
+        if url.endswith("/labels/UNREAD"):
+            return httpx.Response(200, json={"messagesUnread": unread_count}, request=request)
         if url.endswith("/messages"):
             calls["list_params"].append(dict(params or {}))
             return httpx.Response(200, json=list_pages.pop(0), request=request)
@@ -325,3 +330,46 @@ async def test_list_failure_keeps_ids_already_collected(monkeypatch):
     client = GoogleGmailClient("id", "secret", "refresh")
 
     assert await client.list_ids_since(SINCE) == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_count_unread_returns_label_count(monkeypatch):
+    _install_fake_api(monkeypatch, unread_count=17)
+    client = GoogleGmailClient("id", "secret", "refresh")
+
+    assert await client.count_unread() == 17
+
+
+@pytest.mark.asyncio
+async def test_count_unread_returns_none_on_malformed_payload(monkeypatch):
+    _install_fake_api(monkeypatch, unread_count=None)  # missing "messagesUnread" -> None value
+    client = GoogleGmailClient("id", "secret", "refresh")
+
+    assert await client.count_unread() is None
+
+
+@pytest.mark.asyncio
+async def test_count_unread_returns_none_on_token_failure(monkeypatch):
+    async def fake_post(self, url, headers=None, data=None, json=None):  # noqa: ARG001
+        raise httpx.ConnectError("boom", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    client = GoogleGmailClient("id", "secret", "refresh")
+
+    assert await client.count_unread() is None
+
+
+@pytest.mark.asyncio
+async def test_count_unread_returns_none_on_http_error(monkeypatch):
+    async def fake_post(self, url, headers=None, data=None, json=None):  # noqa: ARG001
+        request = httpx.Request("POST", url)
+        return httpx.Response(200, json={"access_token": "t"}, request=request)
+
+    async def fake_get(self, url, params=None, headers=None):  # noqa: ARG001
+        raise httpx.ConnectError("boom", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    client = GoogleGmailClient("id", "secret", "refresh")
+
+    assert await client.count_unread() is None

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from integrations.gmail_client import MailMessage
 from integrations.google_calendar import CalendarClient, CalendarEvent
 from integrations.llm_client import NullLLMClient
 from integrations.weather_client import DailyWeather
@@ -9,6 +10,39 @@ from services.task_service import TaskService
 from storage import TaskStore
 
 FIXED_NOW = datetime(2026, 9, 9, 10, 0)
+
+
+class FakeGmailClient:
+    def __init__(self, messages: list[MailMessage] | None = None, unread_count: int | None = 0):
+        self._messages = messages or []
+        self._unread_count = unread_count
+
+    async def list_unread(self, limit: int = 10, important_only: bool = False):
+        return self._messages[:limit]
+
+    async def list_ids_since(self, since, max_messages=5000):
+        return []
+
+    async def get_messages(self, ids):
+        return []
+
+    async def count_unread(self) -> int | None:
+        return self._unread_count
+
+
+def _mail(sender_name: str = "Иван", subject: str = "Тема") -> MailMessage:
+    return MailMessage(
+        id="m1",
+        thread_id="t1",
+        sender=f"{sender_name} <x@example.com>",
+        sender_name=sender_name,
+        sender_email="x@example.com",
+        subject=subject,
+        date=datetime(2026, 9, 9, 9, 0, tzinfo=UTC),
+        snippet="",
+        body="",
+        labels=("INBOX", "UNREAD"),
+    )
 
 
 @pytest.fixture
@@ -255,3 +289,67 @@ def test_pick_main_task_ranks_fyi_last_despite_being_index_zero():
 def test_pick_main_task_ties_broken_by_original_order():
     tasks = ["первая [priority:: 2]", "вторая [priority:: 2]"]
     assert _pick_main_task(tasks) == "первая [priority:: 2]"
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_no_mail_section_without_gmail(task_service):
+    digest = DigestService(task_service, now=lambda: FIXED_NOW)
+    text = await digest.build_morning_digest()
+    assert "Непрочит" not in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_no_mail_section_when_zero_unread(task_service):
+    digest = DigestService(
+        task_service, gmail=FakeGmailClient(messages=[], unread_count=0), now=lambda: FIXED_NOW
+    )
+    text = await digest.build_morning_digest()
+    assert "Непрочит" not in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_shows_unread_mail_section(task_service):
+    gmail = FakeGmailClient(
+        messages=[_mail("Иван", "Счёт"), _mail("Пётр", "Договор")], unread_count=2
+    )
+    digest = DigestService(task_service, gmail=gmail, now=lambda: FIXED_NOW)
+
+    text = await digest.build_morning_digest()
+
+    assert "Непрочитанных писем: 2" in text
+    assert "Иван: Счёт" in text
+    assert "Пётр: Договор" in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_mail_section_notes_remaining_count(task_service):
+    gmail = FakeGmailClient(messages=[_mail("Иван", "Счёт")], unread_count=8)
+    digest = DigestService(task_service, gmail=gmail, now=lambda: FIXED_NOW)
+
+    text = await digest.build_morning_digest()
+
+    assert "Непрочитанных писем: 8" in text
+    assert "и ещё 7" in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_mail_section_without_count_falls_back_to_header_only(task_service):
+    gmail = FakeGmailClient(messages=[_mail("Иван", "Счёт")], unread_count=None)
+    digest = DigestService(task_service, gmail=gmail, now=lambda: FIXED_NOW)
+
+    text = await digest.build_morning_digest()
+
+    assert "Непрочитанные письма:" in text
+    assert "Иван: Счёт" in text
+    assert "и ещё" not in text
+
+
+@pytest.mark.asyncio
+async def test_morning_digest_mail_section_shown_even_with_no_tasks(task_service):
+    gmail = FakeGmailClient(messages=[_mail("Иван", "Счёт")], unread_count=1)
+    digest = DigestService(task_service, gmail=gmail, now=lambda: FIXED_NOW)
+
+    text = await digest.build_morning_digest()
+
+    assert "Иван: Счёт" in text
+    assert "нет" in text.lower()  # still says no open tasks

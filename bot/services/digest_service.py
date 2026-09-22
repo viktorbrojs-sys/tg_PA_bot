@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from integrations.gmail_client import GmailClient, NullGmailClient
 from integrations.google_calendar import CalendarClient, NullCalendarClient
 from integrations.weather_client import (
     UMBRELLA_THRESHOLD,
@@ -25,6 +26,7 @@ from storage import PRIORITY_URGENCY, UNTAGGED_PRIORITY_URGENCY, extract_deadlin
 from services.task_service import TaskService
 
 WEEKLY_REVIEW_WINDOW = timedelta(days=7)
+MAIL_DIGEST_PREVIEW_LIMIT = 5
 
 
 def _is_overdue(task_text: str, today: date) -> bool:
@@ -57,12 +59,14 @@ class DigestService:
         task_service: TaskService,
         calendar: CalendarClient | None = None,
         weather: WeatherClient | None = None,
+        gmail: GmailClient | None = None,
         now: Callable[[], datetime] = datetime.now,
         timezone: str = "UTC",
     ) -> None:
         self._tasks = task_service
         self._calendar = calendar or NullCalendarClient()
         self._weather = weather or NullWeatherClient()
+        self._gmail = gmail or NullGmailClient()
         self._now = now
         self._tz = ZoneInfo(timezone)
 
@@ -70,6 +74,7 @@ class DigestService:
         tasks = await self._tasks.list_all_open_tasks()
         weather_line = await self._build_weather_line()
         events_text = await self._build_events_section()
+        mail_text = await self._build_mail_section()
 
         lines = ["🌅 Доброе утро!"]
         if weather_line:
@@ -79,6 +84,8 @@ class DigestService:
             lines.append("Открытых задач нет — можно спланировать день командой /plan.")
             if events_text:
                 lines.append(events_text)
+            if mail_text:
+                lines.append(mail_text)
             return "\n".join(lines)
 
         today = self._now().date()
@@ -90,6 +97,8 @@ class DigestService:
             lines.extend(f"  • {t}" for t in overdue[:5])
         if events_text:
             lines.append(events_text)
+        if mail_text:
+            lines.append(mail_text)
         lines.append(f"\nГлавная задача дня: {_pick_main_task(tasks)}")
         return "\n".join(lines)
 
@@ -129,6 +138,23 @@ class DigestService:
 
         lines = [f"\n📅 Встречи сегодня ({len(events)}):"]
         lines.extend(f"  • {e.start.strftime('%H:%M')} — {e.summary}" for e in events)
+        return "\n".join(lines)
+
+    async def _build_mail_section(self) -> str | None:
+        messages = await self._gmail.list_unread(limit=MAIL_DIGEST_PREVIEW_LIMIT)
+        if not messages:
+            return None
+
+        total = await self._gmail.count_unread()
+        if total is not None:
+            lines = [f"\n📧 Непрочитанных писем: {total}"]
+        else:
+            lines = ["\n📧 Непрочитанные письма:"]
+        lines.extend(
+            f"  • {m.sender_name or m.sender_email or m.sender}: {m.subject}" for m in messages
+        )
+        if total is not None and total > len(messages):
+            lines.append(f"  …и ещё {total - len(messages)}")
         return "\n".join(lines)
 
     async def _build_weather_line(self) -> str | None:

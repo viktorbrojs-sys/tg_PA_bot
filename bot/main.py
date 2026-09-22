@@ -29,6 +29,7 @@ from integrations.embedding_client import (
     NullEmbeddingClient,
     OllamaEmbeddingClient,
 )
+from integrations.gmail_client import GmailClient, GoogleGmailClient, NullGmailClient
 from integrations.google_calendar import CalendarClient, GoogleCalendarClient, NullCalendarClient
 from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
 from integrations.weather_client import NullWeatherClient, OpenMeteoClient, WeatherClient
@@ -129,6 +130,16 @@ def build_weather_client(config: BotConfig) -> WeatherClient:
     return NullWeatherClient()
 
 
+def build_gmail_client(config: BotConfig) -> GmailClient:
+    if config.gmail_client_id and config.gmail_client_secret and config.gmail_refresh_token:
+        return GoogleGmailClient(
+            client_id=config.gmail_client_id,
+            client_secret=config.gmail_client_secret,
+            refresh_token=config.gmail_refresh_token,
+        )
+    return NullGmailClient()
+
+
 def build_embedding_client(config: BotConfig) -> EmbeddingClient:
     if config.has_vault_index:
         return OllamaEmbeddingClient(
@@ -142,12 +153,13 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     llm = build_llm_client(config)
     calendar = build_calendar_client(config)
     weather = build_weather_client(config)
+    gmail = build_gmail_client(config)
 
     task_service = TaskService(store, llm, sections=config.task_sections)
     search_service = SearchService(store, llm)
     contact_service = ContactService(calendar, vault_path=config.obsidian_vault_path)
     digest_service = DigestService(
-        task_service, calendar=calendar, weather=weather, timezone=config.timezone
+        task_service, calendar=calendar, weather=weather, gmail=gmail, timezone=config.timezone
     )
     reflection_state = ReflectionState()
     reflection_service = ReflectionService(task_service, llm)

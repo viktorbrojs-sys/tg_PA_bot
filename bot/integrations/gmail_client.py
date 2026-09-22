@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
+UNREAD_LABEL_URL = "https://gmail.googleapis.com/gmail/v1/users/me/labels/UNREAD"
 
 LIST_PAGE_SIZE = 100  # Gmail API maximum for messages.list
 DEFAULT_MAX_MESSAGES = 5000  # safety cap for one listing, not a product limit
@@ -81,6 +82,13 @@ class GmailClient(Protocol):
         """Fetch full messages by id. Ids that fail to load are skipped."""
         ...
 
+    async def count_unread(self) -> int | None:
+        """Total unread inbox messages (Gmail's own label count — a single
+        cheap call, not a paginated ``messages.list``). ``None`` means the
+        count couldn't be fetched right now, distinct from a real zero.
+        """
+        ...
+
 
 class NullGmailClient:
     """Fallback used when Gmail isn't configured — never any mail."""
@@ -97,6 +105,9 @@ class NullGmailClient:
 
     async def get_messages(self, ids: list[str]) -> list[MailMessage]:
         return []
+
+    async def count_unread(self) -> int | None:
+        return None
 
 
 class GoogleGmailClient:
@@ -212,6 +223,23 @@ class GoogleGmailClient:
 
             results = await asyncio.gather(*(fetch(i) for i in ids))
         return [m for m in results if m is not None]  # order of ``ids`` is preserved
+
+    async def count_unread(self) -> int | None:
+        token = await self._get_access_token()
+        if token is None:
+            return None
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(
+                    UNREAD_LABEL_URL, headers={"Authorization": f"Bearer {token}"}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return int(data["messagesUnread"])
+            except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+                logger.warning("Gmail unread count failed: %s", exc)
+                return None
 
 
 def _parse_message(item: dict[str, Any]) -> MailMessage | None:
