@@ -103,7 +103,7 @@ python-telegram-bot.
   сохраняются в `MailMessage.labels` — если поиск окажется шумным, можно
   будет отфильтровать `CATEGORY_PROMOTIONS`/`CATEGORY_UPDATES` без
   переиндексации, просто на этапе запроса к уже собранному индексу
-- **4.** `/reindex-mail` — **отдельная команда** от `/reindex` (тот остаётся
+- **4.** `/reindex_mail` — **отдельная команда** от `/reindex` (тот остаётся
   только для vault)
 - Как и с Second Brain: пока идёт реализация — README/USER_GUIDE/CHANGELOG
   не трогаем, актуализируем всё разом в конце
@@ -159,21 +159,46 @@ Limited Input devices»).
     (прямая проверка трёх полей, не через `has_gmail`, — так mypy сужает
     тип без `assert`), передан в `DigestService`
   - 258 тестов (было 248), mypy/ruff чисто. **Коммит ещё не сделан.**
-- [ ] **D — локальный индекс писем.** `mail_index.py` (копия `vault_index.py`
-  под `sqlite-vec`, свой файл `~/.tg_pa_bot/mail_index.db`), `services/mail_indexer.py`
-  (тянет новые письма через `list_ids_since()`, эмбеддит через уже готовый
-  `EmbeddingClient`, upsert в индекс, прунинг по `MAIL_INDEX_RETENTION_DAYS`
-  после каждого прогона). Первая индексация — только последние 180 дней.
-  Job по расписанию (свой интервал или переиспользовать
-  `VAULT_REINDEX_INTERVAL_MINUTES`? — решить в этом блоке) + `/reindex-mail`
-  для ручного запуска.
+- [x] **D — локальный индекс писем.** Готово полностью:
+  - `mail_index.py`: `MailIndex` на sqlite-vec — копия `vault_index.py`
+    (осознанно не общий класс, см. решение пользователя), но диффинг **по
+    id**, а не по content-hash (в отличие от vault: письмо не меняется
+    после получения, обновлять нечего — только «уже есть / ещё нет»).
+    Плюс `delete_older_than(cutoff)` для retention-прунинга, которого у
+    `VaultIndex` нет. Даты хранятся как UTC ISO-строки — лексикографическое
+    сравнение в SQL совпадает с хронологическим порядком
+  - `services/mail_indexer.py`: `reindex_mail()` — та же «упавший прогон
+    ничего не трогает» гарантия, что у `reindex_vault()` (если эмбеддинг не
+    удался — ни добавления, ни retention-прунинг не применяются)
+  - `GmailClient.list_ids_since(cutoff)` уже был в блоке B — переиспользован
+    как есть, ничего дополнительно готовить не пришлось
+  - **Важная правка блока C/main.py**: `build_embedding_client()` раньше
+    строил `OllamaEmbeddingClient` только при `has_vault_index` — то есть
+    Gmail-only конфигурация (без `OBSIDIAN_VAULT_PATH`) осталась бы без
+    эмбеддингов вообще и почта никогда бы не индексировалась. Исправлено:
+    теперь строится при `has_vault_index ИЛИ has_gmail`
+  - Дим-проба Ollama в `post_init` теперь общая для vault и почты — один
+    вызов `embed()`, оба индекса (`VaultIndex`/`MailIndex`) создаются с
+    одной и той же размерностью, вместо двух отдельных проб
+  - `scheduler/jobs.py`: `mail_reindex` job — по образцу `vault_reindex`,
+    свой интервал (`MAIL_REINDEX_INTERVAL_MINUTES`, не переиспользует
+    vault-интервал — решено явно, не по умолчанию из связанности), тоже
+    независим от `TELEGRAM_CHAT_ID`
+  - `/reindex_mail` — команда без параметров (**не `/reindex-mail`**: в
+    Telegram-командах дефис недопустим, только `[a-z0-9_]`, поймано тестом
+    `test_bot_commands_match_telegram_constraints` до того, как это стало
+    багом в проде)
+  - Конфигурация: `MAIL_INDEX_DB_PATH` (дефолт `~/.tg_pa_bot/mail_index.db`),
+    `MAIL_REINDEX_INTERVAL_MINUTES` (дефолт 60), `MAIL_INDEX_RETENTION_DAYS`
+    (дефолт 180, per решение пользователя)
+  - 284 теста (было 258), mypy/ruff чисто. **Коммит ещё не сделан.**
 - [ ] **E — письма как источник в `/search`/`/contact`.** `SearchService` —
   письма как ещё один источник наряду с vault. `ContactService` — письма
   от/этому человеку как третий источник наряду с заметками и встречами.
 - [ ] **F — документация.** README/USER_GUIDE/CHANGELOG — в конце, разом,
   как и с Second Brain.
 
-Порядок: A → B (сделано) → C (сделано) → D → E → F.
+Порядок: A → B (сделано) → C (сделано) → D (сделано) → E → F.
 
 ## Как продолжать работу (важно для новой сессии)
 

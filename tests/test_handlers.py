@@ -1,10 +1,13 @@
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from handlers import (
     BOT_COMMANDS,
     REINDEX_FAILED_TEXT,
     REINDEX_INDEX_NOT_READY_TEXT,
+    REINDEX_MAIL_FAILED_TEXT,
+    REINDEX_MAIL_INDEX_NOT_READY_TEXT,
+    REINDEX_MAIL_NOT_CONFIGURED_TEXT,
     REINDEX_NOT_CONFIGURED_TEXT,
     _has_valid_deadline_args,
     _has_valid_priority_args,
@@ -15,11 +18,14 @@ from handlers import (
     _run_plan,
     _run_priority,
     _run_reindex,
+    _run_reindex_mail,
     _run_search,
     _run_setcategory,
 )
+from integrations.gmail_client import MailMessage
 from integrations.google_calendar import NullCalendarClient
 from integrations.llm_client import NullLLMClient
+from mail_index import MailIndex
 from services.contact_service import ContactService
 from services.search_service import SearchService
 from services.task_service import TaskService
@@ -290,3 +296,92 @@ async def test_run_reindex_reports_failure_when_embeddings_unavailable(tmp_path)
     reply = await _run_reindex(vault, index, FakeEmbeddingClient(fail=True))
 
     assert reply == REINDEX_FAILED_TEXT
+
+
+class FakeGmailClient:
+    def __init__(self, messages: dict | None = None):
+        self._messages = messages or {}
+
+    async def list_unread(self, limit=10, important_only=False):
+        return []
+
+    async def list_ids_since(self, since, max_messages=5000):
+        return list(self._messages.keys())
+
+    async def get_messages(self, ids):
+        return [self._messages[i] for i in ids if i in self._messages]
+
+    async def count_unread(self):
+        return None
+
+
+def _mail_message(message_id: str):
+    return MailMessage(
+        id=message_id,
+        thread_id=f"t-{message_id}",
+        sender="Иван <x@example.com>",
+        sender_name="Иван",
+        sender_email="x@example.com",
+        subject="Тема",
+        date=datetime(2026, 9, 9, tzinfo=UTC),
+        snippet="",
+        body="текст",
+        labels=("INBOX",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_mail_not_configured():
+    reply = await _run_reindex_mail(
+        gmail_configured=False,
+        mail_index=None,
+        gmail=None,
+        embeddings=None,
+        retention=timedelta(days=180),
+    )
+    assert reply == REINDEX_MAIL_NOT_CONFIGURED_TEXT
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_mail_index_not_ready():
+    reply = await _run_reindex_mail(
+        gmail_configured=True,
+        mail_index=None,
+        gmail=None,
+        embeddings=None,
+        retention=timedelta(days=180),
+    )
+    assert reply == REINDEX_MAIL_INDEX_NOT_READY_TEXT
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_mail_success(tmp_path):
+    index = MailIndex(tmp_path / "mail.db", embedding_dim=3)
+    gmail = FakeGmailClient({"m1": _mail_message("m1")})
+
+    reply = await _run_reindex_mail(
+        gmail_configured=True,
+        mail_index=index,
+        gmail=gmail,
+        embeddings=FakeEmbeddingClient(),
+        retention=timedelta(days=180),
+    )
+
+    assert "Готово" in reply
+    assert "добавлено 1" in reply
+
+
+@pytest.mark.asyncio
+async def test_run_reindex_mail_reports_failure_when_embeddings_unavailable(tmp_path):
+    index = MailIndex(tmp_path / "mail.db", embedding_dim=3)
+    gmail = FakeGmailClient({"m1": _mail_message("m1")})
+
+    reply = await _run_reindex_mail(
+        gmail_configured=True,
+        mail_index=index,
+        gmail=gmail,
+        embeddings=FakeEmbeddingClient(fail=True),
+        retention=timedelta(days=180),
+    )
+
+    assert reply == REINDEX_MAIL_FAILED_TEXT

@@ -19,6 +19,7 @@ from handlers import (
     make_cmd_plan,
     make_cmd_priority,
     make_cmd_reindex,
+    make_cmd_reindex_mail,
     make_cmd_review,
     make_cmd_search,
     make_cmd_setcategory,
@@ -33,6 +34,7 @@ from integrations.gmail_client import GmailClient, GoogleGmailClient, NullGmailC
 from integrations.google_calendar import CalendarClient, GoogleCalendarClient, NullCalendarClient
 from integrations.llm_client import DeepSeekClient, LLMClient, NullLLMClient
 from integrations.weather_client import NullWeatherClient, OpenMeteoClient, WeatherClient
+from mail_index import MailIndex
 from scheduler.jobs import setup_scheduler
 from services.contact_service import ContactService
 from services.digest_service import DigestService
@@ -141,7 +143,11 @@ def build_gmail_client(config: BotConfig) -> GmailClient:
 
 
 def build_embedding_client(config: BotConfig) -> EmbeddingClient:
-    if config.has_vault_index:
+    # Shared between Second Brain (vault) and Gmail search — either one
+    # needing embeddings is enough to build a real client; both then reuse
+    # the single dim-probe result in post_init below, rather than each
+    # probing Ollama separately.
+    if config.has_vault_index or config.has_gmail:
         return OllamaEmbeddingClient(
             base_url=config.ollama_base_url, model=config.ollama_embed_model
         )
@@ -180,6 +186,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     app.bot_data["reflection_state"] = reflection_state
     app.bot_data["meeting_brief_service"] = meeting_brief_service
     app.bot_data["embeddings"] = build_embedding_client(config)
+    app.bot_data["gmail"] = gmail
     app.bot_data["search_service"] = search_service
 
     if config.has_allowlist:
@@ -198,6 +205,14 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     app.add_handler(CommandHandler("search", make_cmd_search(search_service, pending_state)))
     app.add_handler(CommandHandler("contact", make_cmd_contact(contact_service, pending_state)))
     app.add_handler(CommandHandler("reindex", make_cmd_reindex(config.obsidian_vault_path)))
+    app.add_handler(
+        CommandHandler(
+            "reindex_mail",
+            make_cmd_reindex_mail(
+                config.has_gmail, timedelta(days=config.mail_index_retention_days)
+            ),
+        )
+    )
     app.add_handler(CommandHandler("review", make_cmd_review(digest_service)))
     app.add_handler(
         MessageHandler(
@@ -232,31 +247,42 @@ def build_app(config: BotConfig) -> Application:
         reflection_state: ReflectionState = app.bot_data["reflection_state"]
         meeting_brief_service: MeetingBriefService | None = app.bot_data["meeting_brief_service"]
 
-        # VaultIndex needs the embedding dimension up front (sqlite-vec's
-        # vec0 tables have a fixed vector width), which we only learn by
-        # actually calling Ollama — so this probe happens here, once, at
-        # startup, rather than baking a per-model dimension table into the
-        # config layer. If Ollama isn't reachable yet, vault indexing is
-        # simply skipped for this run (same "degrade gracefully" pattern as
-        # a misconfigured calendar/weather integration) — it'll pick back up
-        # on the next bot restart once Ollama is up.
+        # VaultIndex/MailIndex both need the embedding dimension up front
+        # (sqlite-vec's vec0 tables have a fixed vector width), which we
+        # only learn by actually calling Ollama — so a single shared probe
+        # happens here, once, at startup, rather than baking a per-model
+        # dimension table into the config layer, and rather than each index
+        # probing separately. If Ollama isn't reachable yet, both indexes
+        # are simply skipped for this run (same "degrade gracefully"
+        # pattern as a misconfigured calendar/weather integration) — it'll
+        # pick back up on the next bot restart once Ollama is up.
         embeddings: EmbeddingClient = app.bot_data["embeddings"]
-        vault_index: VaultIndex | None = None
-        if config.has_vault_index:
+        embedding_dim: int | None = None
+        if config.has_vault_index or config.has_gmail:
             probe = await embeddings.embed(["_dimension_probe_"])
             if not probe:
                 logger.error(
-                    "OBSIDIAN_VAULT_PATH задан, но Ollama (%s, модель %s) недоступна — "
-                    "индексация vault отключена для этого запуска бота.",
+                    "OBSIDIAN_VAULT_PATH и/или Gmail заданы, но Ollama (%s, модель %s) "
+                    "недоступна — индексация vault/почты отключена для этого запуска бота.",
                     config.ollama_base_url,
                     config.ollama_embed_model,
                 )
             else:
-                vault_index = VaultIndex(config.vault_index_db_path, embedding_dim=len(probe[0]))
-                app.bot_data["vault_index"] = vault_index
-                search_service: SearchService = app.bot_data["search_service"]
-                search_service.enable_semantic_search(vault_index, embeddings)
+                embedding_dim = len(probe[0])
 
+        vault_index: VaultIndex | None = None
+        if config.has_vault_index and embedding_dim is not None:
+            vault_index = VaultIndex(config.vault_index_db_path, embedding_dim=embedding_dim)
+            app.bot_data["vault_index"] = vault_index
+            search_service: SearchService = app.bot_data["search_service"]
+            search_service.enable_semantic_search(vault_index, embeddings)
+
+        mail_index: MailIndex | None = None
+        if config.has_gmail and embedding_dim is not None:
+            mail_index = MailIndex(config.mail_index_db_path, embedding_dim=embedding_dim)
+            app.bot_data["mail_index"] = mail_index
+
+        gmail: GmailClient = app.bot_data["gmail"]
         app.bot_data["scheduler"] = setup_scheduler(
             app,
             config,
@@ -264,7 +290,9 @@ def build_app(config: BotConfig) -> Application:
             reflection_state,
             meeting_brief_service,
             vault_index=vault_index,
-            embeddings=embeddings if vault_index is not None else None,
+            mail_index=mail_index,
+            gmail=gmail if mail_index is not None else None,
+            embeddings=embeddings if (vault_index is not None or mail_index is not None) else None,
         )
 
     return Application.builder().token(config.token).post_init(post_init).build()

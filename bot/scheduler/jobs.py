@@ -7,7 +7,7 @@ update.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,7 +15,10 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from config import BotConfig
 from integrations.embedding_client import EmbeddingClient
+from integrations.gmail_client import GmailClient
+from mail_index import MailIndex
 from services.digest_service import DigestService
+from services.mail_indexer import reindex_mail
 from services.meeting_brief_service import MeetingBriefService
 from services.reflection_service import ReflectionState
 from services.vault_indexer import reindex_vault
@@ -43,14 +46,18 @@ def setup_scheduler(
     meeting_briefs: MeetingBriefService | None = None,
     vault_index: VaultIndex | None = None,
     embeddings: EmbeddingClient | None = None,
+    mail_index: MailIndex | None = None,
+    gmail: GmailClient | None = None,
 ) -> AsyncIOScheduler | None:
     """Register the morning/evening/weekly jobs (need TELEGRAM_CHAT_ID), plus
     meeting-brief polling if *meeting_briefs* is given (Google Calendar
     configured), plus periodic vault reindexing if *vault_index*/*embeddings*
-    are given (OBSIDIAN_VAULT_PATH configured — Second Brain). The chat-based
-    jobs and vault reindexing are independent: reindexing needs no chat to
-    message, so it still runs even without TELEGRAM_CHAT_ID set. Returns None
-    only if there is nothing at all to schedule.
+    are given (OBSIDIAN_VAULT_PATH configured — Second Brain), plus periodic
+    mail reindexing if *mail_index*/*gmail*/*embeddings* are given (Gmail
+    configured). The chat-based jobs and both reindex jobs are independent:
+    reindexing needs no chat to message, so they still run even without
+    TELEGRAM_CHAT_ID set. Returns None only if there is nothing at all to
+    schedule.
     """
     tz = ZoneInfo(config.timezone)
     scheduler = AsyncIOScheduler(timezone=config.timezone)
@@ -142,6 +149,30 @@ def setup_scheduler(
             replace_existing=True,
         )
         registered.append(f"vault reindex every {config.vault_reindex_interval_minutes}min")
+
+    if (
+        config.has_gmail
+        and mail_index is not None
+        and gmail is not None
+        and embeddings is not None
+    ):
+        retention = timedelta(days=config.mail_index_retention_days)
+
+        async def run_mail_reindex() -> None:
+            now = datetime.now(tz=tz)
+            stats = await reindex_mail(gmail, mail_index, embeddings, retention, now)
+            if stats.failed:
+                logger.warning(
+                    "Scheduled mail reindex could not complete (embedding backend unavailable)"
+                )
+
+        scheduler.add_job(
+            run_mail_reindex,
+            IntervalTrigger(minutes=config.mail_reindex_interval_minutes),
+            id="mail_reindex",
+            replace_existing=True,
+        )
+        registered.append(f"mail reindex every {config.mail_reindex_interval_minutes}min")
 
     if not registered:
         return None

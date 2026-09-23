@@ -15,12 +15,15 @@ support two flows:
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from integrations.embedding_client import EmbeddingClient
+from integrations.gmail_client import GmailClient
+from mail_index import MailIndex
 from services.contact_service import ContactService
 from services.digest_service import DigestService
+from services.mail_indexer import reindex_mail
 from services.pending_command_state import PendingCommandState
 from services.reflection_service import ReflectionService, ReflectionState
 from services.search_service import SearchService
@@ -46,6 +49,7 @@ BOT_COMMANDS: list[tuple[str, str]] = [
     ("search", "Найти информацию в заметках"),
     ("contact", "Найти человека: упоминания в заметках + прошлые встречи"),
     ("reindex", "Обновить индекс vault для семантического поиска сейчас"),
+    ("reindex_mail", "Обновить индекс почты для поиска сейчас"),
     ("done", "Отметить задачу как выполненную (номер из /list)"),
     ("deadline", "Установить или убрать дедлайн у задачи"),
     ("priority", "Установить или убрать приоритет у задачи"),
@@ -68,6 +72,7 @@ WELCOME_TEXT = (
     "/search <запрос> — найти информацию в заметках\n"
     "/contact <имя> — найти человека: упоминания в заметках + прошлые встречи\n"
     "/reindex — обновить индекс vault для семантического поиска сейчас\n"
+    "/reindex_mail — обновить индекс почты для поиска сейчас\n"
     "/done N — отметить задачу N (из /list) как выполненную\n"
     "/deadline N ГГГГ-ММ-ДД — поставить дедлайн задаче N (необязательно для всех)\n"
     "/priority N уровень — поставить приоритет задаче N\n"
@@ -92,6 +97,8 @@ HELP_TEXT = (
     "за последние 90 дней (если настроен)\n"
     "• /reindex — обновить индекс vault прямо сейчас, не дожидаясь фонового "
     "расписания (актуально только при настроенном OBSIDIAN_VAULT_PATH)\n"
+    "• /reindex_mail — то же самое для индекса почты (актуально только при "
+    "настроенном Gmail)\n"
     "• /done N — отметить N-ю задачу из /list как выполненную\n"
     "• /deadline N ГГГГ-ММ-ДД — поставить дедлайн задаче N; /deadline N off — убрать. "
     "Дедлайн ставится по желанию, не у каждой задачи он есть\n"
@@ -633,6 +640,67 @@ def make_cmd_reindex(vault_path: Path | None):
         await update.message.reply_text(reply)
 
     return cmd_reindex
+
+
+# ── /reindex-mail — no arguments, syncs the Gmail search index on demand ─────
+
+REINDEX_MAIL_NOT_CONFIGURED_TEXT = "📧 Gmail не настроен — индексировать нечего."
+REINDEX_MAIL_INDEX_NOT_READY_TEXT = (
+    "⚠️ Индекс почты ещё не готов — либо Ollama была недоступна при старте "
+    "бота (проверьте OLLAMA_BASE_URL/OLLAMA_EMBED_MODEL), либо бот только "
+    "что перезапустился. Переиндексация заработает после следующего "
+    "успешного старта, когда Ollama будет доступна."
+)
+REINDEX_MAIL_FAILED_TEXT = (
+    "⚠️ Ollama недоступна прямо сейчас — переиндексация прервана, индекс не тронут."
+)
+
+
+async def _run_reindex_mail(
+    gmail_configured: bool,
+    mail_index: MailIndex | None,
+    gmail: GmailClient | None,
+    embeddings: EmbeddingClient | None,
+    retention: timedelta,
+) -> str:
+    if not gmail_configured:
+        return REINDEX_MAIL_NOT_CONFIGURED_TEXT
+    if mail_index is None or gmail is None or embeddings is None:
+        return REINDEX_MAIL_INDEX_NOT_READY_TEXT
+
+    stats = await reindex_mail(gmail, mail_index, embeddings, retention, datetime.now(UTC))
+    if stats.failed:
+        return REINDEX_MAIL_FAILED_TEXT
+
+    return f"✅ Готово: добавлено {stats.added}, удалено по retention {stats.deleted}."
+
+
+def make_cmd_reindex_mail(gmail_configured: bool, retention: timedelta):
+    async def cmd_reindex_mail(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if update.message is None:
+            return
+
+        # Same reasoning as /reindex: mail_index/embeddings only exist once
+        # post_init's Ollama dim-probe has succeeded, so read from bot_data
+        # at call time. gmail itself is always in bot_data once configured
+        # (built in register_handlers, independent of the dim-probe) — it's
+        # mail_index specifically that gates on Ollama being reachable.
+        mail_index = ctx.application.bot_data.get("mail_index")
+        gmail = ctx.application.bot_data.get("gmail")
+        embeddings = ctx.application.bot_data.get("embeddings")
+
+        try:
+            reply = await _run_reindex_mail(
+                gmail_configured, mail_index, gmail, embeddings, retention
+            )
+        except OSError as exc:
+            logger.error("Mail reindex failed: %s", exc)
+            await update.message.reply_text(GENERIC_ERROR_TEXT)
+            return
+
+        await update.message.reply_text(reply)
+
+    return cmd_reindex_mail
 
 
 # ── /review — on-demand weekly review (also sent proactively by the scheduler) ─

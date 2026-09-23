@@ -275,3 +275,41 @@ def test_resolve_vault_index_db_path_default(monkeypatch):
 def test_resolve_vault_index_db_path_custom(monkeypatch, tmp_path):
     monkeypatch.setenv("VAULT_INDEX_DB_PATH", str(tmp_path / "custom.db"))
     assert config._resolve_vault_index_db_path() == (tmp_path / "custom.db").resolve()
+
+
+def test_resolve_mail_index_db_path_default(monkeypatch):
+    monkeypatch.delenv("MAIL_INDEX_DB_PATH", raising=False)
+    assert config._resolve_mail_index_db_path() == Path.home() / ".tg_pa_bot" / "mail_index.db"
+
+
+def test_resolve_mail_index_db_path_custom(monkeypatch, tmp_path):
+    monkeypatch.setenv("MAIL_INDEX_DB_PATH", str(tmp_path / "custom-mail.db"))
+    assert config._resolve_mail_index_db_path() == (tmp_path / "custom-mail.db").resolve()
+
+
+def test_load_config_mail_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
+    monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "tasks.md"))
+    monkeypatch.delenv("MAIL_INDEX_DB_PATH", raising=False)
+    monkeypatch.delenv("MAIL_REINDEX_INTERVAL_MINUTES", raising=False)
+    monkeypatch.delenv("MAIL_INDEX_RETENTION_DAYS", raising=False)
+    monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
+
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.mail_index_db_path == Path.home() / ".tg_pa_bot" / "mail_index.db"
+    assert cfg.mail_reindex_interval_minutes == config.DEFAULT_MAIL_REINDEX_INTERVAL_MINUTES
+    assert cfg.mail_index_retention_days == config.DEFAULT_MAIL_INDEX_RETENTION_DAYS
+
+
+def test_load_config_mail_custom_values(monkeypatch, tmp_path):
+    monkeypatch.setenv("TG_BOT_TOKEN", "123456:ABCDEF")
+    monkeypatch.setenv("OBSIDIAN_FILE", str(tmp_path / "tasks.md"))
+    monkeypatch.setenv("MAIL_REINDEX_INTERVAL_MINUTES", "30")
+    monkeypatch.setenv("MAIL_INDEX_RETENTION_DAYS", "90")
+    monkeypatch.setattr(config, "_ENV_FILE", tmp_path / "does-not-exist.env")
+
+    cfg = config.load_config()
+    assert cfg is not None
+    assert cfg.mail_reindex_interval_minutes == 30
+    assert cfg.mail_index_retention_days == 90

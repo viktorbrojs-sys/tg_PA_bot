@@ -27,6 +27,8 @@ DEFAULT_MEETING_BRIEF_LEAD_MINUTES = 30
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_OLLAMA_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_VAULT_REINDEX_INTERVAL_MINUTES = 60
+DEFAULT_MAIL_REINDEX_INTERVAL_MINUTES = 60
+DEFAULT_MAIL_INDEX_RETENTION_DAYS = 180
 
 # Values accepted by APScheduler's CronTrigger(day_of_week=...).
 _VALID_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
@@ -62,6 +64,9 @@ class BotConfig:
     gmail_client_id: str | None
     gmail_client_secret: str | None
     gmail_refresh_token: str | None
+    mail_index_db_path: Path
+    mail_reindex_interval_minutes: int
+    mail_index_retention_days: int
 
     @property
     def has_allowlist(self) -> bool:
@@ -216,6 +221,17 @@ def _resolve_vault_index_db_path() -> Path:
     return Path.home() / ".tg_pa_bot" / "vault_index.db"
 
 
+def _resolve_mail_index_db_path() -> Path:
+    """Where the mail search index lives — separate file from the vault
+    index (different schema, different content, independently prunable by
+    retention), same dotfolder convention.
+    """
+    raw = os.environ.get("MAIL_INDEX_DB_PATH", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path.home() / ".tg_pa_bot" / "mail_index.db"
+
+
 def _validate_obsidian_vault_path(path: Path) -> str | None:
     """Return an error message if the vault path is unusable, else None."""
     if not path.exists():
@@ -324,6 +340,13 @@ def load_config() -> BotConfig | None:
         gmail_client_id=os.environ.get("GMAIL_CLIENT_ID", "").strip() or None,
         gmail_client_secret=os.environ.get("GMAIL_CLIENT_SECRET", "").strip() or None,
         gmail_refresh_token=os.environ.get("GMAIL_REFRESH_TOKEN", "").strip() or None,
+        mail_index_db_path=_resolve_mail_index_db_path(),
+        mail_reindex_interval_minutes=_resolve_positive_int(
+            "MAIL_REINDEX_INTERVAL_MINUTES", DEFAULT_MAIL_REINDEX_INTERVAL_MINUTES
+        ),
+        mail_index_retention_days=_resolve_positive_int(
+            "MAIL_INDEX_RETENTION_DAYS", DEFAULT_MAIL_INDEX_RETENTION_DAYS
+        ),
     )
 
     env_source = "file .env" if _ENV_FILE.exists() else "environment"
