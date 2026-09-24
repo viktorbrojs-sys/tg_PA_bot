@@ -136,6 +136,64 @@ async def test_delete_older_than_noop_when_nothing_old(index):
 
 
 @pytest.mark.asyncio
+async def test_search_text_matches_sender_name_case_insensitively(index):
+    await index.upsert([_message("m1", sender_name="Иван Иванов")], [[1.0, 0.0, 0.0]])
+
+    results = await index.search_text("иванов")
+
+    assert [r.message_id for r in results] == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_search_text_matches_subject_and_body(index):
+    await index.upsert(
+        [
+            _message("subj", subject="Про бюджет", body="ничего особенного"),
+            _message("body", subject="Тема", body="обсудили бюджет вчера"),
+            _message("none", subject="Другое", body="и снова другое"),
+        ],
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    )
+
+    results = await index.search_text("бюджет")
+
+    assert {r.message_id for r in results} == {"subj", "body"}
+
+
+@pytest.mark.asyncio
+async def test_search_text_no_match_returns_empty(index):
+    await index.upsert([_message("m1")], [[1.0, 0.0, 0.0]])
+    assert await index.search_text("не найдётся") == []
+
+
+@pytest.mark.asyncio
+async def test_search_text_sorted_most_recent_first(index):
+    await index.upsert(
+        [
+            _message("old", date=datetime(2026, 1, 1, tzinfo=UTC), subject="Иван старый"),
+            _message("new", date=datetime(2026, 9, 1, tzinfo=UTC), subject="Иван новый"),
+        ],
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+    )
+
+    results = await index.search_text("Иван")
+
+    assert [r.message_id for r in results] == ["new", "old"]
+
+
+@pytest.mark.asyncio
+async def test_search_text_respects_limit(index):
+    await index.upsert(
+        [_message(f"m{i}", subject="Иван") for i in range(10)],
+        [[1.0, 0.0, 0.0]] * 10,
+    )
+
+    results = await index.search_text("Иван", limit=3)
+
+    assert len(results) == 3
+
+
+@pytest.mark.asyncio
 async def test_index_persists_across_instances(tmp_path):
     db_path = tmp_path / "mail.db"
     await MailIndex(db_path, embedding_dim=3).upsert([_message("m1")], [[1.0, 0.0, 0.0]])

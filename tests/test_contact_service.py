@@ -2,7 +2,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from integrations.gmail_client import MailMessage
 from integrations.google_calendar import CalendarEvent, NullCalendarClient
+from mail_index import MailIndex
 from services.contact_service import ContactService
 
 NOW = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
@@ -182,3 +184,91 @@ async def test_long_note_mention_is_truncated(tmp_path):
     result = await service.find("Иванов")
 
     assert "…" in result
+
+
+def _mail(
+    message_id: str,
+    *,
+    sender_name: str = "Иванов",
+    subject: str = "Тема",
+    body: str = "текст письма",
+    date: datetime = NOW - timedelta(days=5),
+) -> MailMessage:
+    return MailMessage(
+        id=message_id,
+        thread_id=f"t-{message_id}",
+        sender=f"{sender_name} <x@example.com>",
+        sender_name=sender_name,
+        sender_email="x@example.com",
+        subject=subject,
+        date=date,
+        snippet="",
+        body=body,
+        labels=("INBOX",),
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_reports_nothing_across_all_three_sources(tmp_path):
+    mail_index = MailIndex(tmp_path / "mail.db", embedding_dim=3)
+    service = ContactService(
+        NullCalendarClient(), vault_path=tmp_path, mail_index=mail_index, now=lambda: NOW
+    )
+    result = await service.find("Иванов")
+    assert "Ничего не нашёл" in result
+
+
+@pytest.mark.asyncio
+async def test_find_mail_mentions(tmp_path):
+    mail_index = MailIndex(tmp_path / "mail.db", embedding_dim=3)
+    await mail_index.upsert([_mail("m1")], [[1.0, 0.0, 0.0]])
+
+    service = ContactService(
+        NullCalendarClient(), vault_path=tmp_path, mail_index=mail_index, now=lambda: NOW
+    )
+    result = await service.find("Иванов")
+
+    assert "Письма" in result
+    assert "Тема" in result
+    assert "Упоминания в заметках" not in result
+    assert "Прошлые встречи" not in result
+
+
+@pytest.mark.asyncio
+async def test_find_without_mail_index_skips_mail_section(tmp_path):
+    _write(tmp_path / "note.md", "## X\nПро Иванова\n")
+
+    service = ContactService(NullCalendarClient(), vault_path=tmp_path, now=lambda: NOW)
+    result = await service.find("Иванов")
+
+    assert "Письма" not in result
+    assert "Упоминания в заметках" in result
+
+
+@pytest.mark.asyncio
+async def test_find_combines_all_three_sources(tmp_path):
+    _write(tmp_path / "note.md", "## X\nЗаметка про Иванова\n")
+    mail_index = MailIndex(tmp_path / "mail.db", embedding_dim=3)
+    await mail_index.upsert([_mail("m1")], [[1.0, 0.0, 0.0]])
+    events = [
+        CalendarEvent(
+            id="1",
+            summary="Созвон",
+            start=NOW - timedelta(days=3),
+            end=NOW - timedelta(days=3) + timedelta(hours=1),
+            attendee_names=("Иванов",),
+        )
+    ]
+
+    class FakeCalendarClient:
+        async def list_events(self, start, end):
+            return [e for e in events if start <= e.start <= end]
+
+    service = ContactService(
+        FakeCalendarClient(), vault_path=tmp_path, mail_index=mail_index, now=lambda: NOW
+    )
+    result = await service.find("Иванов")
+
+    assert "Упоминания в заметках" in result
+    assert "Письма" in result
+    assert "Прошлые встречи" in result

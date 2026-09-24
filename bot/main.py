@@ -188,6 +188,7 @@ def register_handlers(app: Application, config: BotConfig) -> None:
     app.bot_data["embeddings"] = build_embedding_client(config)
     app.bot_data["gmail"] = gmail
     app.bot_data["search_service"] = search_service
+    app.bot_data["contact_service"] = contact_service
 
     if config.has_allowlist:
         app.add_handler(TypeHandler(Update, make_access_guard(config.allowed_user_ids)), group=-1)
@@ -257,6 +258,8 @@ def build_app(config: BotConfig) -> Application:
         # pattern as a misconfigured calendar/weather integration) — it'll
         # pick back up on the next bot restart once Ollama is up.
         embeddings: EmbeddingClient = app.bot_data["embeddings"]
+        search_service: SearchService = app.bot_data["search_service"]
+        contact_service: ContactService = app.bot_data["contact_service"]
         embedding_dim: int | None = None
         if config.has_vault_index or config.has_gmail:
             probe = await embeddings.embed(["_dimension_probe_"])
@@ -274,13 +277,14 @@ def build_app(config: BotConfig) -> Application:
         if config.has_vault_index and embedding_dim is not None:
             vault_index = VaultIndex(config.vault_index_db_path, embedding_dim=embedding_dim)
             app.bot_data["vault_index"] = vault_index
-            search_service: SearchService = app.bot_data["search_service"]
             search_service.enable_semantic_search(vault_index, embeddings)
 
         mail_index: MailIndex | None = None
         if config.has_gmail and embedding_dim is not None:
             mail_index = MailIndex(config.mail_index_db_path, embedding_dim=embedding_dim)
             app.bot_data["mail_index"] = mail_index
+            search_service.enable_mail_search(mail_index, embeddings)
+            contact_service.enable_mail_search(mail_index)
 
         gmail: GmailClient = app.bot_data["gmail"]
         app.bot_data["scheduler"] = setup_scheduler(

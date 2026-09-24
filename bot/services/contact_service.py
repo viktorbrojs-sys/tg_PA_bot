@@ -1,18 +1,24 @@
-"""Cross-references a person's name across the vault and Google Calendar.
+"""Cross-references a person's name across the vault, Gmail, and Google Calendar.
 
-Combines two independent, already-existing sources:
+Combines three independent, already-existing sources:
 
 - A plain substring search over the whole vault's chunks (``vault_scanner``
   — deliberately NOT the embeddings pipeline: a name lookup is a literal
   string match, not a semantic "what does the vault know about X" question,
   and this way it still works even when Ollama is down or not configured).
+- ``MailIndex.search_text`` — the same literal-substring reasoning, applied
+  to already-indexed mail (sender/subject/body). Only covers what's been
+  indexed within the retention window (Gmail block D), not the whole
+  mailbox — a live Gmail API search per ``/contact`` call would be more
+  complete but noticeably slower for a command used interactively.
 - Google Calendar's ``list_events``, matched against each event's attendee
   names/emails (``CalendarEvent.attendee_names``/``attendees``).
 
-Both sources degrade independently, same as everywhere else in this
+All three sources degrade independently, same as everywhere else in this
 project: no vault configured -> note-mentions section is just empty; no
-calendar configured (``NullCalendarClient``) -> meetings section is just
-empty. Never an error either way — worst case, "nothing found".
+mail index -> mail section is just empty; no calendar configured
+(``NullCalendarClient``) -> meetings section is just empty. Never an error
+either way — worst case, "nothing found".
 """
 
 from __future__ import annotations
@@ -23,11 +29,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from integrations.google_calendar import CalendarClient, CalendarEvent
+from mail_index import MailIndex, MailSearchResult
 from vault_scanner import chunk_vault
 
 DEFAULT_LOOKBACK = timedelta(days=90)
 MAX_NOTE_MENTIONS = 5
 MAX_PAST_MEETINGS = 5
+MAX_MAIL_MENTIONS = 5
 _SNIPPET_LIMIT = 220
 
 
@@ -43,20 +51,34 @@ class ContactService:
         self,
         calendar: CalendarClient,
         vault_path: Path | None,
+        mail_index: MailIndex | None = None,
         lookback: timedelta = DEFAULT_LOOKBACK,
         now: Callable[[], datetime] = datetime.now,
     ) -> None:
         self._calendar = calendar
         self._vault_path = vault_path
+        self._mail_index = mail_index
         self._lookback = lookback
         self._now = now
 
+    def enable_mail_search(self, mail_index: MailIndex) -> None:
+        """Late-bind the mail index once it's ready (main.py's post_init,
+        same reasoning as ``SearchService.enable_mail_search`` — mail
+        indexing needs a successful Ollama dim-probe before ``MailIndex``
+        can even be constructed, which happens after this service already
+        exists).
+        """
+        self._mail_index = mail_index
+
     async def find(self, name: str) -> str:
         mentions = self._find_note_mentions(name)
+        mail = await self._find_mail_mentions(name)
         meetings = await self._find_past_meetings(name)
 
-        if not mentions and not meetings:
-            return f"🔍 Ничего не нашёл про «{name}» — ни в заметках, ни во встречах."
+        if not mentions and not mail and not meetings:
+            return (
+                f"🔍 Ничего не нашёл про «{name}» — ни в заметках, ни в почте, ни во встречах."
+            )
 
         lines = [f"👤 {name}"]
 
@@ -67,6 +89,16 @@ class ContactService:
                 heading_part = f" — {mention.heading}" if mention.heading else ""
                 snippet = _truncate(mention.text)
                 lines.append(f"• {mention.file_path.as_posix()}{heading_part}: {snippet}")
+
+        if mail:
+            lines.append("")
+            lines.append("📧 Письма:")
+            for message in mail:
+                sender = message.sender_name or message.sender_email
+                snippet = _truncate(message.body or message.subject)
+                lines.append(
+                    f"• {message.date:%Y-%m-%d} от {sender} — {message.subject}: {snippet}"
+                )
 
         if meetings:
             lines.append("")
@@ -93,6 +125,11 @@ class ContactService:
                 if len(mentions) >= MAX_NOTE_MENTIONS:
                     break
         return mentions
+
+    async def _find_mail_mentions(self, name: str) -> list[MailSearchResult]:
+        if self._mail_index is None:
+            return []
+        return await self._mail_index.search_text(name, limit=MAX_MAIL_MENTIONS)
 
     async def _find_past_meetings(self, name: str) -> list[CalendarEvent]:
         now = self._now()

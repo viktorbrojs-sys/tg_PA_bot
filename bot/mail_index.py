@@ -188,6 +188,53 @@ class MailIndex:
         finally:
             db.close()
 
+    async def search_text(self, query: str, limit: int = 5) -> list[MailSearchResult]:
+        """Literal, case-insensitive substring match across sender/subject/
+        body of already-indexed messages, most recent first. Not semantic —
+        same reasoning as ``ContactService`` preferring literal name
+        matching over embeddings for people search. Filtering happens in
+        Python, not via SQL ``LIKE``: SQLite's default ``LIKE`` only
+        case-folds ASCII, so Cyrillic and other non-ASCII names would
+        silently stop matching with ``COLLATE NOCASE`` alone.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(self._search_text_sync, query, limit)
+
+    def _search_text_sync(self, query: str, limit: int) -> list[MailSearchResult]:
+        db = self._connect()
+        try:
+            query_lower = query.lower()
+            rows = db.execute(
+                "SELECT message_id, thread_id, sender, sender_name, sender_email, "
+                "subject, date, body, labels FROM messages"
+            ).fetchall()
+            matches = [
+                row
+                for row in rows
+                if query_lower in row[3].lower()  # sender_name
+                or query_lower in row[4].lower()  # sender_email
+                or query_lower in row[5].lower()  # subject
+                or query_lower in row[7].lower()  # body
+            ]
+            matches.sort(key=lambda row: row[6], reverse=True)  # date, ISO string, desc
+            return [
+                MailSearchResult(
+                    message_id=row[0],
+                    thread_id=row[1],
+                    sender=row[2],
+                    sender_name=row[3],
+                    sender_email=row[4],
+                    subject=row[5],
+                    date=datetime.fromisoformat(row[6]),
+                    body=row[7],
+                    labels=tuple(row[8].split(",")) if row[8] else (),
+                    distance=0.0,  # meaningless here — this path never ranks by similarity
+                )
+                for row in matches[:limit]
+            ]
+        finally:
+            db.close()
+
     async def search(self, query_embedding: list[float], k: int = 5) -> list[MailSearchResult]:
         async with self._lock:
             return await asyncio.to_thread(self._search_sync, query_embedding, k)
