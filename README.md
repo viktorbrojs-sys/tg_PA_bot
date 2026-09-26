@@ -32,13 +32,14 @@ Telegram-бот-секретарь поверх Obsidian-хранилища: п�
 | `/plan <текст>` | Разбивает одно сообщение на несколько задач, классифицирует и сохраняет каждую |
 | `/list`         | Все невыполненные задачи (с разбивкой на несколько сообщений при необходимости) |
 | `/list N`       | Последние N невыполненных задач                                        |
-| `/search <запрос>` | Поиск по всему vault (если настроен Second Brain) или по файлу задач |
-| `/contact <имя>` | Найти человека: упоминания в заметках + прошлые встречи из Google Calendar |
+| `/search <запрос>` | Поиск по всему vault и почте (если настроен Second Brain/Gmail) или по файлу задач |
+| `/contact <имя>` | Найти человека: упоминания в заметках, письма, прошлые встречи из Google Calendar |
 | `/done N`       | Отмечает N-ю задачу из `/list` как выполненную (с таймстемпом завершения) |
 | `/deadline N ГГГГ-ММ-ДД` | Ставит дедлайн задаче N (необязательно — не у каждой задачи он нужен); `/deadline N off` убирает |
 | `/priority N <уровень>` | Ставит приоритет задаче N: слово (`критический`, `высокий`, `средний`, `низкий`, `план`, `fyi`) или цифра 0-5; `/priority N off` убирает |
 | `/setcategory N <раздел>` | Меняет раздел (категорию) задачи N, например «Маркетинг»; `/setcategory N off` убирает |
 | `/reindex`      | Обновить индекс vault для семантического поиска сейчас, не дожидаясь расписания |
+| `/reindex_mail` | То же самое для индекса почты (только при настроенном Gmail)          |
 | `/review`       | Еженедельный обзор — что выполнено за последние 7 дней                 |
 | `/start`        | Приветствие + краткая инструкция                                       |
 | `/help`         | Справка по командам                                                     |
@@ -172,6 +173,52 @@ Sync/git-бэкапы бинарником, который меняется на
 Без `OBSIDIAN_VAULT_PATH` (или если Ollama недоступна) всё работает как
 раньше — grep по файлу задач, без ошибок.
 
+### Gmail (опционально, только чтение)
+
+Бот никогда не отправляет, не удаляет и не меняет почту — только читает.
+Отдельные креды и refresh token, не связаны с Google Calendar.
+
+1. В том же проекте Google Cloud Console (см. настройку Calendar выше)
+   создайте ещё один OAuth-клиент, но типа **Desktop app** (не «TVs and
+   Limited Input devices» — Google не разрешает Gmail-scope для этого типа
+   клиента). Включите Gmail API для проекта.
+2. Переведите OAuth consent screen в статус **«In production»** — иначе
+   refresh token живёт всего 7 дней и бот через неделю перестанет читать
+   почту (для личного использования полная верификация Google не нужна,
+   будет только предупреждение «app isn't verified», его можно пропустить).
+3. Запустите на машине с браузером:
+   ```bash
+   python scripts/gmail_auth.py
+   ```
+   Скрипт поднимет временный локальный сервер, откроет браузер и после
+   подтверждения выведет три строки для `.env`.
+4. Добавьте их в `.env`:
+   ```ini
+   GMAIL_CLIENT_ID=...
+   GMAIL_CLIENT_SECRET=...
+   GMAIL_REFRESH_TOKEN=...
+   ```
+
+Что это даёт:
+
+- **Сводка непрочитанных писем в утреннем дайджесте** — до 5 последних, с
+  точным общим числом непрочитанных.
+- **`/search` и `/contact`** начинают учитывать почту наравне с vault (если
+  Second Brain тоже настроен) — см. разделы выше.
+- Требует ту же Ollama, что и Second Brain (эмбеддинги для поиска по
+  почте) — если Second Brain не настроен, а Gmail настроен, эмбеддинги всё
+  равно включаются автоматически, отдельно настраивать не нужно.
+
+Почта индексируется локально (`sqlite-vec`, файл
+`~/.tg_pa_bot/mail_index.db`, отдельно от индекса vault) с retention
+**180 дней** (`MAIL_INDEX_RETENTION_DAYS`) — старые письма автоматически
+убираются из локального индекса (не из Gmail, сама почта не трогается).
+Переиндексация — по расписанию (`MAIL_REINDEX_INTERVAL_MINUTES`, по
+умолчанию раз в час) или вручную: `/reindex_mail` из Telegram.
+
+Без `GMAIL_*` переменных всё работает как раньше — Gmail-раздел дайджеста
+просто не показывается, `/search`/`/contact` не включают почту.
+
 ### ИИ-классификация (опционально)
 
 Без `DEEPSEEK_API_KEY` бот полностью рабочий: все новые задачи попадают в
@@ -259,7 +306,13 @@ python main.py
 | `OLLAMA_BASE_URL`  | нет          | Адрес локальной Ollama для эмбеддингов (default: `http://localhost:11434`) |
 | `OLLAMA_EMBED_MODEL` | нет        | Модель эмбеддингов в Ollama (default: `nomic-embed-text`)       |
 | `VAULT_REINDEX_INTERVAL_MINUTES` | нет | Как часто переиндексировать vault в фоне (default: `60`)   |
-| `VAULT_INDEX_DB_PATH` | нет      | Куда писать файл индекса (default: `~/.tg_pa_bot/vault_index.db`) |
+| `VAULT_INDEX_DB_PATH` | нет      | Куда писать файл индекса vault (default: `~/.tg_pa_bot/vault_index.db`) |
+| `GMAIL_CLIENT_ID`  | нет          | OAuth Client ID для Gmail, тип Desktop app (см. `scripts/gmail_auth.py`) |
+| `GMAIL_CLIENT_SECRET` | нет       | OAuth Client Secret для Gmail                                  |
+| `GMAIL_REFRESH_TOKEN` | нет       | Refresh token, полученный скриптом авторизации                 |
+| `MAIL_INDEX_DB_PATH` | нет        | Куда писать файл индекса почты (default: `~/.tg_pa_bot/mail_index.db`) |
+| `MAIL_REINDEX_INTERVAL_MINUTES` | нет | Как часто переиндексировать почту в фоне (default: `60`)   |
+| `MAIL_INDEX_RETENTION_DAYS` | нет | Сколько дней почты хранить в локальном индексе (default: `180`) |
 
 **Как узнать свой Telegram user_id:** напишите [@userinfobot](https://t.me/userinfobot) — он пришлёт ваш ID в ответ.
 
@@ -319,26 +372,30 @@ bot/
   handlers.py                      — команды и обработка текстовых сообщений
   vault_scanner.py                 — сканирование vault и чанкинг markdown по заголовкам
   vault_index.py                   — VaultIndex: векторное хранилище на sqlite-vec
+  mail_index.py                    — MailIndex: то же для почты (диффинг по id, не по хэшу)
   services/
     task_service.py                — классификация задач, планировщик дня, /list
-    digest_service.py              — утренний дайджест (+ встречи), вечерняя рефлексия, /review
+    digest_service.py              — утренний дайджест (+ встречи, погода, непрочитанные письма), вечерняя рефлексия, /review
     reflection_service.py          — разбор ответа на вечернюю рефлексию
-    search_service.py              — поиск: семантический по vault (если настроен) или grep по файлу
-    contact_service.py             — /contact: упоминания в vault + прошлые встречи
-    vault_indexer.py               — reindex_vault(): diff/эмбеддинг/прунинг индекса
+    search_service.py              — поиск: семантический по vault+почте (если настроены) или grep по файлу
+    contact_service.py             — /contact: упоминания в vault, письма, прошлые встречи
+    vault_indexer.py               — reindex_vault(): diff/эмбеддинг/прунинг индекса vault
+    mail_indexer.py                — reindex_mail(): то же для почты, + retention-прунинг
     pending_command_state.py       — команды, ожидающие параметр следующим сообщением
     meeting_brief_service.py       — подготовка к встрече (context brief)
   integrations/
     llm_client.py                  — абстракция LLM: DeepSeekClient + NullLLMClient fallback
     google_calendar.py             — абстракция календаря: GoogleCalendarClient + NullCalendarClient
+    gmail_client.py                — абстракция почты: GoogleGmailClient + NullGmailClient
     weather_client.py              — абстракция погоды: OpenMeteoClient + NullWeatherClient
     embedding_client.py            — абстракция эмбеддингов: OllamaEmbeddingClient + NullEmbeddingClient
   scheduler/
-    jobs.py                        — APScheduler: дайджест/рефлексия/обзор/встречи/реиндекс по расписанию
+    jobs.py                        — APScheduler: дайджест/рефлексия/обзор/встречи/реиндекс vault/реиндекс почты по расписанию
 scripts/
-  google_calendar_auth.py          — одноразовый скрипт получения refresh token (запускает пользователь)
+  google_calendar_auth.py          — одноразовый скрипт получения refresh token для Calendar
+  gmail_auth.py                    — то же для Gmail (loopback-flow с PKCE, не device-flow)
   reindex_vault.py                 — ручной запуск полной переиндексации vault
-tests/                              — 226 тестов на все модули выше
+tests/                              — 297 тестов на все модули выше
 .github/workflows/ci.yml — lint + type-check + tests на каждый push/PR
 requirements.txt      — рантайм-зависимости
 requirements-dev.txt  — + пакеты для разработки/тестов
@@ -367,9 +424,14 @@ LICENSE
 - Поиск человека по имени (`/contact`) — точное совпадение подстроки, не
   морфология и не семантика (специально: для имён это надёжнее, чем
   эмбеддинги, и работает даже без настроенной Ollama).
-- Семантический поиск (`/search`, Second Brain) требует локально
-  запущенной Ollama — без `OBSIDIAN_VAULT_PATH` или при недоступной Ollama
-  поиск тихо откатывается на grep по файлу задач, без ошибок.
+- Семантический поиск (`/search`, Second Brain, почта) требует локально
+  запущенной Ollama — без `OBSIDIAN_VAULT_PATH`/`GMAIL_*` или при
+  недоступной Ollama поиск тихо откатывается на grep по файлу задач, без
+  ошибок.
+- Почта индексируется локально с retention 180 дней (`MAIL_INDEX_RETENTION_DAYS`) —
+  `/search`/`/contact` не найдут письмо старше этого окна, даже если оно
+  всё ещё есть в Gmail (сама переписка нигде не удаляется, только выпадает
+  из локального поискового индекса).
 - Идеи на будущее: пробки в дайджест (требует платный API), режим webhook
   для облачного деплоя.
 
@@ -377,8 +439,8 @@ LICENSE
 
 - **Python** 3.12
 - **[python-telegram-bot](https://python-telegram-bot.org/)** 22.7 (asyncio, PTB v20+)
-- **APScheduler** — планировщик проактивных сообщений и переиндексации vault
-- **httpx** — HTTP-клиент для DeepSeek API, Google Calendar, Ollama
-- **[sqlite-vec](https://github.com/asg017/sqlite-vec)** — векторное хранилище для Second Brain, без внешнего сервиса
+- **APScheduler** — планировщик проактивных сообщений и переиндексации vault/почты
+- **httpx** — HTTP-клиент для DeepSeek API, Google Calendar, Gmail, Ollama
+- **[sqlite-vec](https://github.com/asg017/sqlite-vec)** — векторное хранилище для Second Brain и поиска по почте, без внешнего сервиса
 - **[Ollama](https://ollama.com/)** (опционально, вне процесса бота) — локальные эмбеддинги для семантического поиска
 - Long polling — не нужен внешний IP или домен

@@ -1,6 +1,6 @@
 [project]
 name = "tg-obsidian-bot"
-version = "1.10.0"
+version = "1.11.0"
 description = "Telegram bot that appends tasks to an Obsidian markdown file"
 readme = "README.md"
 license = { text = "MIT" }
